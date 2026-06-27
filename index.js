@@ -4,6 +4,8 @@ const getRawBody = require("raw-body");
 const crypto = require("crypto");
 const { ThirdwebSDK } = require("@thirdweb-dev/sdk");
 const { Shopify, DataType } = require("@shopify/shopify-api");
+const fetch = require("node-fetch");
+const FormData = require("form-data");
 require("dotenv").config();
 
 const {
@@ -12,7 +14,39 @@ const {
   SHOPIFY_SECRET_KEY,
   SHOPIFY_SITE_URL,
   SHOPIFY_ACCESS_TOKEN,
+  PINATA_JWT,
 } = process.env;
+
+// Upload image to IPFS via Pinata
+async function uploadImageToIPFS(imageUrl) {
+  // Download the image from Cloudinary
+  const imageResponse = await fetch(imageUrl);
+  const imageBuffer = await imageResponse.buffer();
+  const contentType = imageResponse.headers.get("content-type");
+  const filename = imageUrl.split("/").pop();
+
+  // Upload to Pinata
+  const formData = new FormData();
+  formData.append("file", imageBuffer, {
+    filename: filename,
+    contentType: contentType,
+  });
+
+  const pinataResponse = await fetch(
+    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${PINATA_JWT}`,
+        ...formData.getHeaders(),
+      },
+      body: formData,
+    }
+  );
+
+  const pinataData = await pinataResponse.json();
+  return `ipfs://${pinataData.IpfsHash}`;
+}
 
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
@@ -51,7 +85,6 @@ app.post("/webhooks/orders/create", async (req, res) => {
         path: `/admin/api/2022-07/products/${item.product_id}.json`,
       });
 
-      // Fetch metafields (traits) for this product
       const metafieldsQuery = await client.get({
         type: DataType.JSON,
         path: `/admin/api/2022-07/products/${item.product_id}/metafields.json`,
@@ -59,7 +92,6 @@ app.post("/webhooks/orders/create", async (req, res) => {
 
       const metafields = metafieldsQuery.body.metafields;
 
-      // Helper to find a metafield value by key
       const getMeta = (key) => {
         const field = metafields.find(
           (m) => m.namespace === "verisart" && m.key === key
@@ -67,10 +99,15 @@ app.post("/webhooks/orders/create", async (req, res) => {
         return field ? field.value : "";
       };
 
+      // Upload image to IPFS
+      const cloudinaryImageUrl = productQuery.body.product.image.src;
+      const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
+      console.log("Image uploaded to IPFS:", ipfsImageUrl);
+
       const metadata = {
         name: productQuery.body.product.title,
         description: productQuery.body.product.body_html,
-        image: productQuery.body.product.image.src,
+        image: ipfsImageUrl,
         attributes: [
           { trait_type: "Character", value: getMeta("character") },
           { trait_type: "Theme", value: getMeta("gimmick") },
@@ -88,7 +125,7 @@ app.post("/webhooks/orders/create", async (req, res) => {
       ).value;
 
       const minted = await nftCollection.mintTo(walletAddress, metadata);
-      console.log("Successfully minted NFT with traits!", minted);
+      console.log("Successfully minted NFT with IPFS image and traits!", minted);
     }
 
     res.sendStatus(200);
