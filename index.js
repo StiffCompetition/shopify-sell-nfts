@@ -73,13 +73,13 @@ app.post("/webhooks/orders/create", async (req, res) => {
         image: productQuery.body.product.image.src,
         attributes: [
           { trait_type: "Character", value: getMeta("character") },
-          { trait_type: "Gimmick", value: getMeta("gimmick") },
-          { trait_type: "Inspection Grade", value: getMeta("inspection_grade") },
+          { trait_type: "Theme", value: getMeta("gimmick") },
+          { trait_type: "Collection", value: getMeta("inspection_grade") },
           { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
           { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
           { trait_type: "Friction Force", value: getMeta("friction_force") },
           { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
-          { trait_type: "Expanded Lore", value: getMeta("expanded_lore") },
+          { trait_type: "Lore", value: getMeta("expanded_lore") },
         ],
       };
 
