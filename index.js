@@ -14,12 +14,9 @@ const {
   SHOPIFY_ACCESS_TOKEN,
 } = process.env;
 
-// Listen for requests to the /webhooks/orders/create route
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
 
-  // Below, we're verifying the webhook was sent from Shopify and not a potential attacker
-  // Learn more here: https://shopify.dev/apps/webhooks/configuration/https#step-5-verify-the-webhook
   const hmac = req.get("X-Shopify-Hmac-Sha256");
   const body = await getRawBody(req);
   const hash = crypto
@@ -27,9 +24,7 @@ app.post("/webhooks/orders/create", async (req, res) => {
     .update(body, "utf8", "hex")
     .digest("base64");
 
-  // Compare our hash to Shopify's hash
   if (hash === hmac) {
-    // Create a new client for the specified shop.
     const client = new Shopify.Clients.Rest(
       SHOPIFY_SITE_URL,
       SHOPIFY_ACCESS_TOKEN
@@ -44,36 +39,56 @@ app.post("/webhooks/orders/create", async (req, res) => {
     const itemsPurchased = response.body.order.line_items;
 
     const sdk = ThirdwebSDK.fromPrivateKey(
-      // Learn more about securely accessing your private key: https://portal.thirdweb.com/sdk/set-up-the-sdk/securing-your-private-key
       ADMIN_PRIVATE_KEY,
-      "goerli"
+      "polygon"
     );
 
     const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
 
-    // For each item purchased, mint the wallet address an NFT
     for (const item of itemsPurchased) {
-      // Grab the information of the product ordered
       const productQuery = await client.get({
         type: DataType.JSON,
         path: `/admin/api/2022-07/products/${item.product_id}.json`,
       });
 
-      // Set the metadata for the NFT to the product information
+      // Fetch metafields (traits) for this product
+      const metafieldsQuery = await client.get({
+        type: DataType.JSON,
+        path: `/admin/api/2022-07/products/${item.product_id}/metafields.json`,
+      });
+
+      const metafields = metafieldsQuery.body.metafields;
+
+      // Helper to find a metafield value by key
+      const getMeta = (key) => {
+        const field = metafields.find(
+          (m) => m.namespace === "verisart" && m.key === key
+        );
+        return field ? field.value : "";
+      };
+
       const metadata = {
         name: productQuery.body.product.title,
         description: productQuery.body.product.body_html,
         image: productQuery.body.product.image.src,
+        attributes: [
+          { trait_type: "Character", value: getMeta("character") },
+          { trait_type: "Gimmick", value: getMeta("gimmick") },
+          { trait_type: "Inspection Grade", value: getMeta("inspection_grade") },
+          { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
+          { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
+          { trait_type: "Friction Force", value: getMeta("friction_force") },
+          { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
+          { trait_type: "Expanded Lore", value: getMeta("expanded_lore") },
+        ],
       };
 
       const walletAddress = item.properties.find(
         (p) => p.name === "Wallet Address"
       ).value;
 
-      // Mint the NFT
       const minted = await nftCollection.mintTo(walletAddress, metadata);
-
-      console.log("Successfully minted NFT!", minted);
+      console.log("Successfully minted NFT with traits!", minted);
     }
 
     res.sendStatus(200);
