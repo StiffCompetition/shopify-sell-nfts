@@ -6,6 +6,7 @@ const { ThirdwebSDK } = require("@thirdweb-dev/sdk");
 const { Shopify, DataType } = require("@shopify/shopify-api");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
+const { Pool } = require("pg");
 require("dotenv").config();
 
 const {
@@ -15,117 +16,67 @@ const {
   SHOPIFY_SITE_URL,
   SHOPIFY_ACCESS_TOKEN,
   PINATA_JWT,
+  DATABASE_URL,
 } = process.env;
+
+// Connect to Postgres
+const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
+
+// Create claims table if it doesn't exist
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS claims (
+      id SERIAL PRIMARY KEY,
+      claim_token TEXT UNIQUE NOT NULL,
+      order_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      claimed BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  console.log("Database ready!");
+}
+initDB();
 
 // Upload image to IPFS via Pinata
 async function uploadImageToIPFS(imageUrl) {
-  // Download the image from Cloudinary
   const imageResponse = await fetch(imageUrl);
   const imageBuffer = await imageResponse.buffer();
   const contentType = imageResponse.headers.get("content-type");
   const filename = imageUrl.split("/").pop();
 
-  // Upload to Pinata
   const formData = new FormData();
-  formData.append("file", imageBuffer, {
-    filename: filename,
-    contentType: contentType,
-  });
+  formData.append("file", imageBuffer, { filename, contentType });
 
-  const pinataResponse = await fetch(
-    "https://api.pinata.cloud/pinning/pinFileToIPFS",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${PINATA_JWT}`,
-        ...formData.getHeaders(),
-      },
-      body: formData,
-    }
-  );
+  const pinataResponse = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${PINATA_JWT}`, ...formData.getHeaders() },
+    body: formData,
+  });
 
   const pinataData = await pinataResponse.json();
   return `ipfs://${pinataData.IpfsHash}`;
 }
 
+// Shopify webhook - store claim, don't mint yet
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
 
   const hmac = req.get("X-Shopify-Hmac-Sha256");
   const body = await getRawBody(req);
-  const hash = crypto
-    .createHmac("sha256", SHOPIFY_SECRET_KEY)
-    .update(body, "utf8", "hex")
-    .digest("base64");
+  const hash = crypto.createHmac("sha256", SHOPIFY_SECRET_KEY).update(body, "utf8", "hex").digest("base64");
 
   if (hash === hmac) {
-    const client = new Shopify.Clients.Rest(
-      SHOPIFY_SITE_URL,
-      SHOPIFY_ACCESS_TOKEN
-    );
-
-    const shopifyOrderId = req.get("X-Shopify-Order-Id");
-    const response = await client.get({
-      type: DataType.JSON,
-      path: `/admin/api/2022-07/orders/${shopifyOrderId}.json`,
-    });
-
-    const itemsPurchased = response.body.order.line_items;
-
-    const sdk = ThirdwebSDK.fromPrivateKey(
-      ADMIN_PRIVATE_KEY,
-      "polygon"
-    );
-
-    const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
+    const orderData = JSON.parse(body);
+    const itemsPurchased = orderData.line_items;
 
     for (const item of itemsPurchased) {
-      const productQuery = await client.get({
-        type: DataType.JSON,
-        path: `/admin/api/2022-07/products/${item.product_id}.json`,
-      });
-
-      const metafieldsQuery = await client.get({
-        type: DataType.JSON,
-        path: `/admin/api/2022-07/products/${item.product_id}/metafields.json`,
-      });
-
-      const metafields = metafieldsQuery.body.metafields;
-
-      const getMeta = (key) => {
-        const field = metafields.find(
-          (m) => m.namespace === "verisart" && m.key === key
-        );
-        return field ? field.value : "";
-      };
-
-      // Upload image to IPFS
-      const cloudinaryImageUrl = productQuery.body.product.image.src;
-      const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
-      console.log("Image uploaded to IPFS:", ipfsImageUrl);
-
-      const metadata = {
-        name: productQuery.body.product.title,
-        description: productQuery.body.product.body_html,
-        image: ipfsImageUrl,
-        attributes: [
-          { trait_type: "Character", value: getMeta("character") },
-          { trait_type: "Theme", value: getMeta("gimmick") },
-          { trait_type: "Collection", value: getMeta("inspection_grade") },
-          { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
-          { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
-          { trait_type: "Friction Force", value: getMeta("friction_force") },
-          { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
-          { trait_type: "Lore", value: getMeta("expanded_lore") },
-        ],
-      };
-
-      const walletAddress = item.properties.find(
-        (p) => p.name === "Wallet Address"
-      ).value;
-
-      const minted = await nftCollection.mintTo(walletAddress, metadata);
-      console.log("Successfully minted NFT with IPFS image and traits!", minted);
+      const claimToken = crypto.randomBytes(32).toString("hex");
+      await pool.query(
+        "INSERT INTO claims (claim_token, order_id, product_id) VALUES ($1, $2, $3)",
+        [claimToken, orderData.id.toString(), item.product_id.toString()]
+      );
+      console.log(`Claim token created: ${claimToken} for product ${item.product_id}`);
     }
 
     res.sendStatus(200);
@@ -134,4 +85,152 @@ app.post("/webhooks/orders/create", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("Example app listening on port 3000!"));
+// Claim page
+app.get("/claim/:token", async (req, res) => {
+  const { token } = req.params;
+  const result = await pool.query("SELECT * FROM claims WHERE claim_token = $1", [token]);
+
+  if (result.rows.length === 0) {
+    return res.send("<h1>Invalid claim link</h1>");
+  }
+
+  const claim = result.rows[0];
+  if (claim.claimed) {
+    return res.send("<h1>This NFT has already been claimed</h1>");
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Claim Your Stiff Competition NFT</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
+        button { width: 100%; padding: 12px; background: #000; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin: 5px 0; }
+        button:hover { background: #333; }
+        .or { margin: 15px 0; color: #999; }
+        .message { margin-top: 20px; padding: 10px; border-radius: 4px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+      </style>
+    </head>
+    <body>
+      <h1>🎉 Claim Your NFT</h1>
+      <p>You've purchased a Stiff Competition NFT! Enter your wallet address below to receive it.</p>
+      
+      <h3>I have a wallet</h3>
+      <input type="text" id="walletAddress" placeholder="Enter your wallet address (0x...)" />
+      <button onclick="claimWithWallet()">Claim to My Wallet</button>
+      
+      <div class="or">— OR —</div>
+      
+      <h3>I don't have a wallet</h3>
+      <input type="email" id="emailAddress" placeholder="Enter your email address" />
+      <button onclick="claimWithEmail()">Create Wallet & Claim</button>
+      
+      <div id="message"></div>
+
+      <script>
+        async function claimWithWallet() {
+          const wallet = document.getElementById('walletAddress').value.trim();
+          if (!wallet) { showMessage('Please enter your wallet address', false); return; }
+          await submitClaim(wallet);
+        }
+
+        async function claimWithEmail() {
+          const email = document.getElementById('emailAddress').value.trim();
+          if (!email) { showMessage('Please enter your email address', false); return; }
+          await submitClaim(null, email);
+        }
+
+        async function submitClaim(wallet, email) {
+          const btn = document.querySelectorAll('button');
+          btn.forEach(b => b.disabled = true);
+          showMessage('Processing your claim... please wait', null);
+          
+          const response = await fetch('/claim/${token}/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ walletAddress: wallet, email: email })
+          });
+          
+          const data = await response.json();
+          if (data.success) {
+            showMessage('🎉 Your NFT has been minted and sent to your wallet!', true);
+          } else {
+            showMessage('Something went wrong: ' + data.error, false);
+            btn.forEach(b => b.disabled = false);
+          }
+        }
+
+        function showMessage(msg, success) {
+          const el = document.getElementById('message');
+          el.className = 'message ' + (success === true ? 'success' : success === false ? 'error' : '');
+          el.textContent = msg;
+        }
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+// Process the claim and mint the NFT
+app.post("/claim/:token/submit", express.json(), async (req, res) => {
+  const { token } = req.params;
+  const { walletAddress, email } = req.body;
+
+  try {
+    const result = await pool.query("SELECT * FROM claims WHERE claim_token = $1 AND claimed = FALSE", [token]);
+    if (result.rows.length === 0) {
+      return res.json({ success: false, error: "Invalid or already claimed" });
+    }
+
+    const claim = result.rows[0];
+
+    // Get wallet address - either provided directly or create from email
+    let mintAddress = walletAddress;
+    if (!mintAddress && email) {
+      // Use email as identifier - create a deterministic wallet address from email
+      // For now we use a Thirdweb in-app wallet approach
+      mintAddress = email; // Thirdweb handles email wallets
+    }
+
+    if (!mintAddress) {
+      return res.json({ success: false, error: "Please provide a wallet address or email" });
+    }
+
+    // Get Shopify product details
+    const client = new Shopify.Clients.Rest(SHOPIFY_SITE_URL, SHOPIFY_ACCESS_TOKEN);
+
+    const productQuery = await client.get({
+      type: DataType.JSON,
+      path: `/admin/api/2022-07/products/${claim.product_id}.json`,
+    });
+
+    const metafieldsQuery = await client.get({
+      type: DataType.JSON,
+      path: `/admin/api/2022-07/products/${claim.product_id}/metafields.json`,
+    });
+
+    const metafields = metafieldsQuery.body.metafields;
+    const getMeta = (key) => {
+      const field = metafields.find((m) => m.namespace === "verisart" && m.key === key);
+      return field ? field.value : "";
+    };
+
+    // Upload image to IPFS
+    const cloudinaryImageUrl = productQuery.body.product.image.src;
+    const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
+
+    const metadata = {
+      name: productQuery.body.product.title,
+      description: productQuery.body.product.body_html,
+      image: ipfsImageUrl,
+      attributes: [
+        { trait_type: "Character", value: getMeta("character") },
+        { trait_type: "Theme", value: getMeta("gimmick") },
+        { trait_type: "Collection", value: getMeta("inspection_grade") },
+        { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
+        { trait_type: "Innuendo
