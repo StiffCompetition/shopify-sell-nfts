@@ -6,6 +6,7 @@ const { ThirdwebSDK } = require("@thirdweb-dev/sdk");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
 const { Pool } = require("pg");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const {
@@ -18,6 +19,8 @@ const {
   THIRDWEB_SECRET_KEY,
   PINATA_JWT,
   DATABASE_URL,
+  EMAIL_FROM,
+  EMAIL_PASSWORD,
 } = process.env;
 
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
@@ -29,6 +32,7 @@ async function initDB() {
       claim_token TEXT UNIQUE NOT NULL,
       order_id TEXT NOT NULL,
       product_id TEXT NOT NULL,
+      customer_email TEXT,
       claimed BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW()
     )
@@ -36,6 +40,37 @@ async function initDB() {
   console.log("Database ready!");
 }
 initDB();
+
+const transporter = nodemailer.createTransport({
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
+  auth: {
+    user: EMAIL_FROM,
+    pass: EMAIL_PASSWORD,
+  },
+});
+
+async function sendClaimEmail(customerEmail, customerName, claimToken, productTitle) {
+  const claimUrl = `https://shopify-sell-nfts-production.up.railway.app/claim/${claimToken}`;
+  await transporter.sendMail({
+    from: `"Stiff Competition" <${EMAIL_FROM}>`,
+    to: customerEmail,
+    subject: `Claim Your Stiff Competition NFT - ${productTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: center; padding: 20px;">
+        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style="max-width: 200px; margin-bottom: 20px;" />
+        <h1>🎉 Your NFT is Ready to Claim!</h1>
+        <p>Hi ${customerName},</p>
+        <p>Thank you for purchasing <strong>${productTitle}</strong>. Your Stiff Competition NFT is ready to claim!</p>
+        <p>Click the button below to choose your wallet and receive your NFT.</p>
+        <a href="${claimUrl}" style="display: inline-block; padding: 15px 30px; background: #000; color: #fff; text-decoration: none; border-radius: 4px; font-size: 16px; margin: 20px 0;">Claim Your NFT</a>
+        <p style="color: #999; font-size: 12px;">This link is unique to your order. Please do not share it.</p>
+      </div>
+    `,
+  });
+  console.log(`Claim email sent to ${customerEmail}`);
+}
 
 async function getShopifyToken() {
   const response = await fetch(`https://stiifcompnft.myshopify.com/admin/oauth/access_token`, {
@@ -76,13 +111,17 @@ app.post("/webhooks/orders/create", async (req, res) => {
   if (hash === hmac) {
     const orderData = JSON.parse(body);
     const itemsPurchased = orderData.line_items;
+    const customerEmail = orderData.email;
+    const customerName = orderData.billing_address ? orderData.billing_address.first_name : "Collector";
+
     for (const item of itemsPurchased) {
       const claimToken = crypto.randomBytes(32).toString("hex");
       await pool.query(
-        "INSERT INTO claims (claim_token, order_id, product_id) VALUES ($1, $2, $3) ON CONFLICT (claim_token) DO NOTHING",
-        [claimToken, orderData.id.toString(), item.product_id.toString()]
+        "INSERT INTO claims (claim_token, order_id, product_id, customer_email) VALUES ($1, $2, $3, $4) ON CONFLICT (claim_token) DO NOTHING",
+        [claimToken, orderData.id.toString(), item.product_id.toString(), customerEmail]
       );
       console.log(`Claim token created: ${claimToken} for product ${item.product_id}`);
+      await sendClaimEmail(customerEmail, customerName, claimToken, item.title);
     }
     res.sendStatus(200);
   } else {
@@ -118,7 +157,7 @@ app.get("/claim/:token", async (req, res) => {
       </style>
     </head>
     <body>
-      <img src="https://res.cloudinary.com/dkapdtxek/image/upload/v1782617434/SC_small.svg" alt="Stiff Competition" style="max-width: 200px; margin-bottom: 20px;" />
+      <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style="max-width: 200px; margin-bottom: 20px;" />
       <h1>🎉 Claim Your NFT</h1>
       <p>You've purchased a Stiff Competition NFT! Enter your wallet address below to receive it.</p>
       <h3>I have a wallet</h3>
@@ -210,7 +249,7 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
 
     const metadata = {
       name: productData.product.title,
-      description: productData.product.body_html,
+      description: productData.product.body_html.replace(/<[^>]*>/g, ''),
       image: ipfsImageUrl,
       attributes: [
         { trait_type: "Character", value: getMeta("character") },
