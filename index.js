@@ -3,7 +3,6 @@ const app = express();
 const getRawBody = require("raw-body");
 const crypto = require("crypto");
 const { ThirdwebSDK } = require("@thirdweb-dev/sdk");
-const { Shopify, DataType } = require("@shopify/shopify-api");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
 const { Pool } = require("pg");
@@ -221,19 +220,19 @@ const metafieldsQuery = await fetch(`https://${shopUrl}/admin/api/2022-07/produc
 });
 const metafieldsData = await metafieldsQuery.json();
 
-    const metafields = metafieldsQuery.body.metafields;
+    const metafields = metafieldsData.metafields;
     const getMeta = (key) => {
       const field = metafields.find((m) => m.namespace === "verisart" && m.key === key);
       return field ? field.value : "";
     };
 
     // Upload image to IPFS
-    const cloudinaryImageUrl = productQuery.body.product.image.src;
+    const cloudinaryImageUrl = productData.product.image.src;
     const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
 
     const metadata = {
-      name: productQuery.body.product.title,
-      description: productQuery.body.product.body_html,
+      name: pproductData.product.title,
+      description: productData.product.body_html,
       image: ipfsImageUrl,
       attributes: [
         { trait_type: "Character", value: getMeta("character") },
