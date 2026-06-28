@@ -37,15 +37,14 @@ async function initDB() {
 initDB();
 
 async function getShopifyToken() {
-  const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const response = await fetch(`https://${shopUrl}/admin/oauth/access_token`, {
+  const response = await fetch(`https://stiifcompnft.myshopify.com/admin/oauth/access_token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
       client_id: SHOPIFY_CLIENT_ID,
       client_secret: SHOPIFY_ACCESS_TOKEN,
       grant_type: "client_credentials"
-    })
+    }).toString()
   });
   const data = await response.json();
   console.log("Token response:", JSON.stringify(data));
@@ -118,6 +117,7 @@ app.get("/claim/:token", async (req, res) => {
       </style>
     </head>
     <body>
+      <img src="https://res.cloudinary.com/dkapdtxek/image/upload/v1782617434/SC_small.svg" alt="Stiff Competition" style="max-width: 200px; margin-bottom: 20px;" />
       <h1>🎉 Claim Your NFT</h1>
       <p>You've purchased a Stiff Competition NFT! Enter your wallet address below to receive it.</p>
       <h3>I have a wallet</h3>
