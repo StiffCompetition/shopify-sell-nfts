@@ -77,7 +77,7 @@ app.post("/webhooks/orders/create", async (req, res) => {
     const orderData = JSON.parse(body);
     const itemsPurchased = orderData.line_items;
     for (const item of itemsPurchased) {
-      const claimToken = orderData.id.toString();
+      const claimToken = crypto.randomBytes(32).toString("hex");
       await pool.query(
         "INSERT INTO claims (claim_token, order_id, product_id) VALUES ($1, $2, $3) ON CONFLICT (claim_token) DO NOTHING",
         [claimToken, orderData.id.toString(), item.product_id.toString()]
