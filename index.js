@@ -71,11 +71,11 @@ app.post("/webhooks/orders/create", async (req, res) => {
     const itemsPurchased = orderData.line_items;
 
     for (const item of itemsPurchased) {
-      const claimToken = crypto.randomBytes(32).toString("hex");
-      await pool.query(
-        "INSERT INTO claims (claim_token, order_id, product_id) VALUES ($1, $2, $3)",
-        [claimToken, orderData.id.toString(), item.product_id.toString()]
-      );
+    const claimToken = orderData.id.toString();
+    await pool.query(
+    "INSERT INTO claims (claim_token, order_id, product_id) VALUES ($1, $2, $3)",
+    [claimToken, orderData.id.toString(), item.product_id.toString()]
+    );
       console.log(`Claim token created: ${claimToken} for product ${item.product_id}`);
     }
 
