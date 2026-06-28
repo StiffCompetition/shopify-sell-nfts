@@ -205,15 +205,21 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
 const client = new Shopify.Clients.Rest(shopUrl, SHOPIFY_ACCESS_TOKEN);
 
-    const productQuery = await client.get({
-      type: DataType.JSON,
-      path: `/admin/api/2022-07/products/${claim.product_id}.json`,
-    });
+const productQuery = await fetch(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
+  headers: {
+    'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
+    'Content-Type': 'application/json'
+  }
+});
+const productData = await productQuery.json();
 
-    const metafieldsQuery = await client.get({
-      type: DataType.JSON,
-      path: `/admin/api/2022-07/products/${claim.product_id}/metafields.json`,
-    });
+const metafieldsQuery = await fetch(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
+  headers: {
+    'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
+    'Content-Type': 'application/json'
+  }
+});
+const metafieldsData = await metafieldsQuery.json();
 
     const metafields = metafieldsQuery.body.metafields;
     const getMeta = (key) => {
