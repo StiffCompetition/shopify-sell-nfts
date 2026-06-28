@@ -41,37 +41,6 @@ async function initDB() {
 }
 initDB();
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: EMAIL_FROM,
-    pass: EMAIL_PASSWORD,
-  },
-});
-
-async function sendClaimEmail(customerEmail, customerName, claimToken, productTitle) {
-  const claimUrl = `https://shopify-sell-nfts-production.up.railway.app/claim/${claimToken}`;
-  await transporter.sendMail({
-    from: `"Stiff Competition" <${EMAIL_FROM}>`,
-    to: customerEmail,
-    subject: `Claim Your Stiff Competition NFT - ${productTitle}`,
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: center; padding: 20px;">
-        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style="max-width: 200px; margin-bottom: 20px;" />
-        <h1>🎉 Your NFT is Ready to Claim!</h1>
-        <p>Hi ${customerName},</p>
-        <p>Thank you for purchasing <strong>${productTitle}</strong>. Your Stiff Competition NFT is ready to claim!</p>
-        <p>Click the button below to choose your wallet and receive your NFT.</p>
-        <a href="${claimUrl}" style="display: inline-block; padding: 15px 30px; background: #000; color: #fff; text-decoration: none; border-radius: 4px; font-size: 16px; margin: 20px 0;">Claim Your NFT</a>
-        <p style="color: #999; font-size: 12px;">This link is unique to your order. Please do not share it.</p>
-      </div>
-    `,
-  });
-  console.log(`Claim email sent to ${customerEmail}`);
-}
-
 async function getShopifyToken() {
   const response = await fetch(`https://stiifcompnft.myshopify.com/admin/oauth/access_token`, {
     method: "POST",
@@ -121,12 +90,21 @@ app.post("/webhooks/orders/create", async (req, res) => {
         [claimToken, orderData.id.toString(), item.product_id.toString(), customerEmail]
       );
       console.log(`Claim token created: ${claimToken} for product ${item.product_id}`);
-      await sendClaimEmail(customerEmail, customerName, claimToken, item.title);
     }
     res.sendStatus(200);
   } else {
     res.sendStatus(403);
   }
+});
+
+// Lookup claim token by order ID and redirect
+app.get("/claim/lookup/:orderId", async (req, res) => {
+  const { orderId } = req.params;
+  const result = await pool.query("SELECT claim_token FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
+  if (result.rows.length === 0) {
+    return res.send("<h1>Invalid or already claimed</h1>");
+  }
+  res.redirect(`/claim/${result.rows[0].claim_token}`);
 });
 
 app.get("/claim/:token", async (req, res) => {
@@ -279,4 +257,5 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
   }
 });
 
+// Start server
 app.listen(3000, () => console.log("Server running on port 3000!"));
