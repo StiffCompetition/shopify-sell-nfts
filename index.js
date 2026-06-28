@@ -209,7 +209,9 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
       headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN, 'Content-Type': 'application/json' }
     });
     const metafieldsData = await metafieldsResponse.json();
-
+    
+console.log("Product data:", JSON.stringify(productData));
+    console.log("Metafields data:", JSON.stringify(metafieldsData));
     const metafields = metafieldsData.metafields;
     const getMeta = (key) => {
       const field = metafields.find((m) => m.namespace === "verisart" && m.key === key);
