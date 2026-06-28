@@ -15,6 +15,7 @@ const {
   SHOPIFY_SITE_URL,
   SHOPIFY_ACCESS_TOKEN,
   SHOPIFY_CLIENT_ID,
+  THIRDWEB_SECRET_KEY,
   PINATA_JWT,
   DATABASE_URL,
 } = process.env;
@@ -223,7 +224,9 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
       ],
     };
 
-    const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon");
+    const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
+      secretKey: THIRDWEB_SECRET_KEY,
+    });
     const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
     const minted = await nftCollection.mintTo(mintAddress, metadata);
 
