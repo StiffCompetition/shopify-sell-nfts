@@ -13,10 +13,14 @@
   "dependencies": {
     "@shopify/shopify-api": "^5.2.0",
     "@thirdweb-dev/sdk": "^3.1.2",
+    "nodemailer": "^6.9.0",
     "crypto": "^1.0.1",
     "dotenv": "^16.0.3",
     "ethers": "^5.7.1",
     "express": "^4.18.1",
+    "form-data": "^4.0.0",
+    "node-fetch": "^2.6.7",
+    "pg": "^8.8.0",
     "raw-body": "^2.5.1"
   }
 }
