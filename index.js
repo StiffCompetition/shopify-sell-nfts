@@ -227,8 +227,8 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
       secretKey: THIRDWEB_SECRET_KEY,
     });
-    const nftCollection = await sdk.getNFTDrop(NFT_COLLECTION_ADDRESS);
-    const minted = await nftCollection.claimTo(mintAddress, 1);
+    const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
+    const minted = await nftCollection.mintTo(mintAddress, metadata);
 
     await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [token]);
     console.log("NFT minted successfully!", minted);
