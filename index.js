@@ -233,4 +233,28 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
         { trait_type: "Theme", value: getMeta("gimmick") },
         { trait_type: "Collection", value: getMeta("inspection_grade") },
         { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
-        { trait_type: "Innuendo
+        { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
+        { trait_type: "Friction Force", value: getMeta("friction_force") },
+        { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
+        { trait_type: "Lore", value: getMeta("expanded_lore") },
+      ],
+    };
+
+    // Mint the NFT
+    const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon");
+    const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
+    const minted = await nftCollection.mintTo(mintAddress, metadata);
+
+    // Mark as claimed
+    await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [token]);
+
+    console.log("NFT minted successfully!", minted);
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error("Minting error:", error);
+    res.json({ success: false, error: error.message });
+  }
+});
+
+app.listen(3000, () => console.log("Server running on port 3000!"));
