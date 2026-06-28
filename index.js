@@ -201,12 +201,12 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
     const productResponse = await fetch(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
-      headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN, 'Content-Type': 'application/json' }
+     headers: { 'Authorization': 'Basic ' + Buffer.from(SHOPIFY_CLIENT_ID + ':' + SHOPIFY_ACCESS_TOKEN).toString('base64'), 'Content-Type': 'application/json' }
     });
     const productData = await productResponse.json();
 
     const metafieldsResponse = await fetch(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
-      headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN, 'Content-Type': 'application/json' }
+      headers: { 'Authorization': 'Basic ' + Buffer.from(SHOPIFY_CLIENT_ID + ':' + SHOPIFY_ACCESS_TOKEN).toString('base64'), 'Content-Type': 'application/json' }
     });
     const metafieldsData = await metafieldsResponse.json();
     
