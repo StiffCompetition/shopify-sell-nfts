@@ -202,7 +202,8 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     }
 
     // Get Shopify product details
-    const client = new Shopify.Clients.Rest(SHOPIFY_SITE_URL, SHOPIFY_ACCESS_TOKEN);
+    const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
+const client = new Shopify.Clients.Rest(shopUrl, SHOPIFY_ACCESS_TOKEN);
 
     const productQuery = await client.get({
       type: DataType.JSON,
