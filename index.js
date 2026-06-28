@@ -256,4 +256,28 @@ console.log("Product data:", JSON.stringify(productData));
   }
 });
 
+// OAuth - visit /auth to start
+app.get("/auth", (req, res) => {
+  const redirectUri = `https://shopify-sell-nfts-production.up.railway.app/auth/callback`;
+  const scopes = "read_orders,write_orders,read_products";
+  const authUrl = `https://stiffcompetition.myshopify.com/admin/oauth/authorize?client_id=${SHOPIFY_CLIENT_ID}&scope=${scopes}&redirect_uri=${redirectUri}`;
+  res.redirect(authUrl);
+});
+
+// OAuth callback - Shopify redirects here with the code
+app.get("/auth/callback", async (req, res) => {
+  const { code } = req.query;
+  const tokenResponse = await fetch(`https://stiffcompetition.myshopify.com/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: SHOPIFY_CLIENT_ID,
+      client_secret: SHOPIFY_ACCESS_TOKEN,
+      code,
+    }),
+  });
+  const tokenData = await tokenResponse.json();
+  console.log("ACCESS TOKEN:", JSON.stringify(tokenData));
+  res.send(`<h1>Your access token is: ${tokenData.access_token}</h1><p>Copy this and add it to Railway as SHOPIFY_ACCESS_TOKEN</p>`);
+});
 app.listen(3000, () => console.log("Server running on port 3000!"));
