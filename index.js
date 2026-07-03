@@ -306,12 +306,14 @@ app.get("/admin/set-contract-metadata", async (req, res) => {
       secretKey: THIRDWEB_SECRET_KEY,
     });
     const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
-    const tx = await nftCollection.metadata.set({
+    const contractMetadataUri = await uploadMetadataToIPFS({
       name: "Stiff Competition: 1994",
       description: "The cancelled 1994 action figure line finally sees daylight. Six characters, zero restraint. Collect the full lineup.",
       image: "https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg",
       external_link: "https://stiffcompetition.shop",
     });
+    console.log("Contract metadata URI:", contractMetadataUri);
+    const tx = await nftCollection.call("setContractURI", [contractMetadataUri]);
     console.log("Contract metadata set:", tx);
     res.send("<h1>Success! Contract metadata updated.</h1><p>You can now remove this route from index.js.</p>");
   } catch (error) {
