@@ -57,7 +57,7 @@ async function fetchWithRetry(url, options, retries = 3, delayMs = 1000) {
 async function getShopifyToken() {
   const response = await fetchWithRetry(`https://stiifcompnft.myshopify.com/admin/oauth/access_token`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept-Encoding": "identity" },
     body: new URLSearchParams({
       client_id: SHOPIFY_CLIENT_ID,
       client_secret: SHOPIFY_ACCESS_TOKEN,
@@ -218,12 +218,12 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     const shopifyToken = await getShopifyToken();
 
     const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
-      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json' }
+      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
     });
     const productData = await productResponse.json();
 
     const metafieldsResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
-      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json' }
+      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
     });
     const metafieldsData = await metafieldsResponse.json();
 
