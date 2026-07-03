@@ -198,7 +198,7 @@ app.get("/claim/:token", async (req, res) => {
           });
           const data = await response.json();
           if (data.success) {
-            showMessage('🎉 Your NFT has been minted and sent to your wallet!', true);
+            showMessage('🎉 Your NFT has been minted and sent to your wallet! <a href="' + data.openseaUrl + '" target="_blank" style="color:#000;text-decoration:underline;">View it on OpenSea</a>', true);
           } else {
             showMessage('Something went wrong: ' + data.error, false);
             btn.forEach(b => b.disabled = false);
@@ -207,7 +207,7 @@ app.get("/claim/:token", async (req, res) => {
         function showMessage(msg, success) {
           const el = document.getElementById('message');
           el.className = 'message ' + (success === true ? 'success' : success === false ? 'error' : '');
-          el.textContent = msg;
+          el.innerHTML = msg;
         }
       </script>
     </body>
@@ -284,7 +284,8 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
 
     await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [token]);
     console.log("NFT minted successfully!", minted);
-    res.json({ success: true });
+    const openseaUrl = `https://opensea.io/assets/matic/${NFT_COLLECTION_ADDRESS}/${minted.id.toString()}`;
+    res.json({ success: true, openseaUrl });
 
   } catch (error) {
     console.error("Minting error:", error);
