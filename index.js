@@ -85,6 +85,20 @@ async function uploadImageToIPFS(imageUrl) {
   return `ipfs://${pinataData.IpfsHash}`;
 }
 
+async function uploadMetadataToIPFS(metadata) {
+  const pinataResponse = await fetchWithRetry("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${PINATA_JWT}`,
+      "Content-Type": "application/json",
+      "Accept-Encoding": "identity",
+    },
+    body: JSON.stringify({ pinataContent: metadata }),
+  });
+  const pinataData = await pinataResponse.json();
+  return `ipfs://${pinataData.IpfsHash}`;
+}
+
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
   const hmac = req.get("X-Shopify-Hmac-Sha256");
@@ -254,11 +268,14 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
 
     console.log("METADATA BEING MINTED:", JSON.stringify(metadata, null, 2));
 
+    const metadataUri = await uploadMetadataToIPFS(metadata);
+    console.log("METADATA URI:", metadataUri);
+
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
       secretKey: THIRDWEB_SECRET_KEY,
     });
     const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
-    const minted = await nftCollection.mintTo(mintAddress, metadata);
+    const minted = await nftCollection.mintTo(mintAddress, metadataUri);
 
     await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [token]);
     console.log("NFT minted successfully!", minted);
