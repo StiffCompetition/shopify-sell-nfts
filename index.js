@@ -127,31 +127,44 @@ app.post("/webhooks/orders/create", async (req, res) => {
   }
 });
 
-// Lookup claim token by order ID and redirect
+// Lookup claims by order ID and redirect to the order claim page
 app.get("/claim/lookup/:orderId", async (req, res) => {
   const { orderId } = req.params;
   const result = await pool.query("SELECT claim_token FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
   if (result.rows.length === 0) {
     return res.send("<h1>Invalid or already claimed</h1>");
   }
-  res.redirect(`/claim/${result.rows[0].claim_token}`);
+  res.redirect(`/claim/order/${orderId}`);
 });
 
-app.get("/claim/:token", async (req, res) => {
-  const { token } = req.params;
-  const result = await pool.query("SELECT * FROM claims WHERE claim_token = $1", [token]);
+app.get("/claim/order/:orderId", async (req, res) => {
+  const { orderId } = req.params;
+  const result = await pool.query("SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
   if (result.rows.length === 0) {
-    return res.send("<h1>Invalid claim link</h1>");
+    return res.send("<h1>Invalid or already claimed</h1>");
   }
-  const claim = result.rows[0];
-  if (claim.claimed) {
-    return res.send("<h1>This NFT has already been claimed</h1>");
+  const claims = result.rows;
+
+  const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const shopifyToken = await getShopifyToken();
+
+  const itemNames = [];
+  for (const claim of claims) {
+    const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
+      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
+    });
+    const productData = await productResponse.json();
+    itemNames.push(productData.product.title);
   }
+
+  const itemCountText = claims.length === 1 ? "1 NFT" : `${claims.length} NFTs`;
+  const itemListHtml = itemNames.map(name => `<li>${name}</li>`).join('');
+
   res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Claim Your Stiff Competition NFT</title>
+      <title>Claim Your Stiff Competition NFT${claims.length > 1 ? 's' : ''}</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <style>
         body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
@@ -162,12 +175,15 @@ app.get("/claim/:token", async (req, res) => {
         .message { margin-top: 20px; padding: 10px; border-radius: 4px; }
         .success { background: #d4edda; color: #155724; }
         .error { background: #f8d7da; color: #721c24; }
+        ul.items { text-align: left; margin: 15px 0; padding-left: 20px; }
+        .nft-link { display: block; margin: 6px 0; }
       </style>
     </head>
     <body>
       <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style="max-width: 200px; margin-bottom: 20px;" />
-      <h1>🎉 Claim Your NFT</h1>
-      <p>You've purchased a Stiff Competition NFT! Enter your wallet address below to receive it.</p>
+      <h1>🎉 Claim Your ${itemCountText}</h1>
+      <p>You've purchased ${itemCountText} from Stiff Competition! Enter your wallet address below to receive ${claims.length === 1 ? 'it' : 'all of them'}.</p>
+      <ul class="items">${itemListHtml}</ul>
       <h3>I have a wallet</h3>
       <input type="text" id="walletAddress" placeholder="Enter your wallet address (0x...)" />
       <button onclick="claimWithWallet()">Claim to My Wallet</button>
@@ -191,14 +207,17 @@ app.get("/claim/:token", async (req, res) => {
           const btn = document.querySelectorAll('button');
           btn.forEach(b => b.disabled = true);
           showMessage('Processing your claim... please wait', null);
-          const response = await fetch('/claim/${token}/submit', {
+          const response = await fetch('/claim/order/${orderId}/submit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ walletAddress: wallet, email: email })
           });
           const data = await response.json();
           if (data.success) {
-            showMessage('🎉 Your NFT has been minted and sent to your wallet! <a href="' + data.openseaUrl + '" target="_blank" style="color:#000;text-decoration:underline;">View it on OpenSea</a>', true);
+            const links = data.items.map(item =>
+              '<a class="nft-link" href="' + item.openseaUrl + '" target="_blank" style="color:#000;text-decoration:underline;">' + item.name + ' — View on OpenSea</a>'
+            ).join('');
+            showMessage('🎉 Your NFT' + (data.items.length > 1 ? 's have' : ' has') + ' been minted and sent to your wallet!' + links, true);
           } else {
             showMessage('Something went wrong: ' + data.error, false);
             btn.forEach(b => b.disabled = false);
@@ -215,15 +234,14 @@ app.get("/claim/:token", async (req, res) => {
   `);
 });
 
-app.post("/claim/:token/submit", express.json(), async (req, res) => {
-  const { token } = req.params;
+app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
+  const { orderId } = req.params;
   const { walletAddress, email } = req.body;
   try {
-    const result = await pool.query("SELECT * FROM claims WHERE claim_token = $1 AND claimed = FALSE", [token]);
+    const result = await pool.query("SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
     if (result.rows.length === 0) {
       return res.json({ success: false, error: "Invalid or already claimed" });
     }
-    const claim = result.rows[0];
     let mintAddress = walletAddress;
     if (!mintAddress && email) {
       mintAddress = email;
@@ -235,57 +253,65 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const shopifyToken = await getShopifyToken();
 
-    const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
-      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
-    });
-    const productData = await productResponse.json();
-
-    const metafieldsResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
-      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
-    });
-    const metafieldsData = await metafieldsResponse.json();
-
-    const metafields = metafieldsData.metafields;
-    console.log("ALL METAFIELDS:", JSON.stringify(metafields, null, 2));
-    const getMeta = (key, namespace = "verisart") => {
-      const field = metafields.find((m) => m.namespace === namespace && m.key === key);
-      return field ? field.value : "";
-    };
-
-    const cloudinaryImageUrl = productData.product.image.src;
-    const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
-
-    const metadata = {
-      name: productData.product.title,
-      description: productData.product.body_html.replace(/<[^>]*>/g, ''),
-      image: ipfsImageUrl,
-      attributes: [
-        { trait_type: "Character", value: getMeta("character", "custom") },
-        { trait_type: "Theme", value: getMeta("gimmick", "custom") },
-        { trait_type: "Collection", value: getMeta("inspection_grade") },
-        { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
-        { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
-        { trait_type: "Friction Force", value: getMeta("friction_force") },
-        { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
-        { trait_type: "Lore", value: getMeta("expanded_lore", "custom") },
-      ],
-    };
-
-    console.log("METADATA BEING MINTED:", JSON.stringify(metadata, null, 2));
-
-    const metadataUri = await uploadMetadataToIPFS(metadata);
-    console.log("METADATA URI:", metadataUri);
-
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
       secretKey: THIRDWEB_SECRET_KEY,
     });
     const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
-    const minted = await nftCollection.mintTo(mintAddress, metadataUri);
 
-    await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [token]);
-    console.log("NFT minted successfully!", minted);
-    const openseaUrl = `https://opensea.io/assets/matic/${NFT_COLLECTION_ADDRESS}/${minted.id.toString()}`;
-    res.json({ success: true, openseaUrl });
+    const mintedItems = [];
+
+    for (const claim of result.rows) {
+      const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
+        headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
+      });
+      const productData = await productResponse.json();
+
+      const metafieldsResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
+        headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
+      });
+      const metafieldsData = await metafieldsResponse.json();
+
+      const metafields = metafieldsData.metafields;
+      console.log("ALL METAFIELDS for product", claim.product_id, ":", JSON.stringify(metafields, null, 2));
+      const getMeta = (key, namespace = "verisart") => {
+        const field = metafields.find((m) => m.namespace === namespace && m.key === key);
+        return field ? field.value : "";
+      };
+
+      const cloudinaryImageUrl = productData.product.image.src;
+      const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
+
+      const metadata = {
+        name: productData.product.title,
+        description: productData.product.body_html.replace(/<[^>]*>/g, ''),
+        image: ipfsImageUrl,
+        attributes: [
+          { trait_type: "Character", value: getMeta("character", "custom") },
+          { trait_type: "Theme", value: getMeta("gimmick", "custom") },
+          { trait_type: "Collection", value: getMeta("inspection_grade") },
+          { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
+          { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
+          { trait_type: "Friction Force", value: getMeta("friction_force") },
+          { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
+          { trait_type: "Lore", value: getMeta("expanded_lore", "custom") },
+        ],
+      };
+
+      console.log("METADATA BEING MINTED:", JSON.stringify(metadata, null, 2));
+
+      const metadataUri = await uploadMetadataToIPFS(metadata);
+      console.log("METADATA URI:", metadataUri);
+
+      const minted = await nftCollection.mintTo(mintAddress, metadataUri);
+      console.log("NFT minted successfully!", minted);
+
+      await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [claim.claim_token]);
+
+      const openseaUrl = `https://opensea.io/assets/matic/${NFT_COLLECTION_ADDRESS}/${minted.id.toString()}`;
+      mintedItems.push({ name: metadata.name, openseaUrl });
+    }
+
+    res.json({ success: true, items: mintedItems });
 
   } catch (error) {
     console.error("Minting error:", error);
