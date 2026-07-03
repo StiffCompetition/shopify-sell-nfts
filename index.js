@@ -69,6 +69,10 @@ async function getShopifyToken() {
   return data.access_token;
 }
 
+function ipfsToGatewayUrl(ipfsUri) {
+  return ipfsUri.replace("ipfs://", "https://gateway.pinata.cloud/ipfs/");
+}
+
 async function uploadImageToIPFS(imageUrl) {
   const imageResponse = await fetchWithRetry(imageUrl);
   const imageBuffer = await imageResponse.buffer();
@@ -82,7 +86,7 @@ async function uploadImageToIPFS(imageUrl) {
     body: formData,
   });
   const pinataData = await pinataResponse.json();
-  return `ipfs://${pinataData.IpfsHash}`;
+  return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
 }
 
 async function uploadMetadataToIPFS(metadata) {
@@ -96,7 +100,7 @@ async function uploadMetadataToIPFS(metadata) {
     body: JSON.stringify({ pinataContent: metadata }),
   });
   const pinataData = await pinataResponse.json();
-  return `ipfs://${pinataData.IpfsHash}`;
+  return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
 }
 
 app.post("/webhooks/orders/create", async (req, res) => {
