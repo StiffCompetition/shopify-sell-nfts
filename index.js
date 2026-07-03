@@ -38,8 +38,24 @@ async function initDB() {
 }
 initDB();
 
+// Retries a fetch call on transient network errors (e.g. "Premature close",
+// ECONNRESET) before giving up. Does NOT retry on a successful HTTP response,
+// even if that response is an error status — those are returned normally
+// so calling code can inspect them.
+async function fetchWithRetry(url, options, retries = 3, delayMs = 1000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (error) {
+      console.log(`Fetch attempt ${attempt}/${retries} failed for ${url}: ${error.message}`);
+      if (attempt === retries) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+}
+
 async function getShopifyToken() {
-  const response = await fetch(`https://stiifcompnft.myshopify.com/admin/oauth/access_token`, {
+  const response = await fetchWithRetry(`https://stiifcompnft.myshopify.com/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -54,13 +70,13 @@ async function getShopifyToken() {
 }
 
 async function uploadImageToIPFS(imageUrl) {
-  const imageResponse = await fetch(imageUrl);
+  const imageResponse = await fetchWithRetry(imageUrl);
   const imageBuffer = await imageResponse.buffer();
   const contentType = imageResponse.headers.get("content-type");
   const filename = imageUrl.split("/").pop();
   const formData = new FormData();
   formData.append("file", imageBuffer, { filename, contentType });
-  const pinataResponse = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+  const pinataResponse = await fetchWithRetry("https://api.pinata.cloud/pinning/pinFileToIPFS", {
     method: "POST",
     headers: { Authorization: `Bearer ${PINATA_JWT}`, ...formData.getHeaders() },
     body: formData,
@@ -201,12 +217,12 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const shopifyToken = await getShopifyToken();
 
-    const productResponse = await fetch(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
+    const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
       headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json' }
     });
     const productData = await productResponse.json();
 
-    const metafieldsResponse = await fetch(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
+    const metafieldsResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
       headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json' }
     });
     const metafieldsData = await metafieldsResponse.json();
@@ -237,6 +253,7 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
     };
 
     console.log("METADATA BEING MINTED:", JSON.stringify(metadata, null, 2));
+
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
       secretKey: THIRDWEB_SECRET_KEY,
     });
