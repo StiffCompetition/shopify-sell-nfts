@@ -293,34 +293,5 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
   }
 });
 
-// ONE-TIME USE: sets collection-level metadata on the NFT contract (name, description,
-// image, external link). Visit this URL once in a browser, confirm it says "success",
-// then this route should be deleted from the code. Protected by requiring your
-// Thirdweb secret key as a query param so no one else can trigger it.
-app.get("/admin/set-contract-metadata", async (req, res) => {
-  if (req.query.key !== THIRDWEB_SECRET_KEY) {
-    return res.status(403).send("Forbidden");
-  }
-  try {
-    const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
-      secretKey: THIRDWEB_SECRET_KEY,
-    });
-    const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
-    const contractMetadataUri = await uploadMetadataToIPFS({
-      name: "Stiff Competition: 1994",
-      description: "The cancelled 1994 action figure line finally sees daylight. Six characters, zero restraint. Collect the full lineup.",
-      image: "https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg",
-      external_link: "https://stiffcompetition.shop",
-    });
-    console.log("Contract metadata URI:", contractMetadataUri);
-    const tx = await nftCollection.call("setContractURI", [contractMetadataUri]);
-    console.log("Contract metadata set:", tx);
-    res.send("<h1>Success! Contract metadata updated.</h1><p>You can now remove this route from index.js.</p>");
-  } catch (error) {
-    console.error("Set contract metadata error:", error);
-    res.status(500).send("Error: " + error.message);
-  }
-});
-
 // Start server
 app.listen(3000, () => console.log("Server running on port 3000!"));
