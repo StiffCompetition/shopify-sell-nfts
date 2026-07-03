@@ -236,6 +236,7 @@ app.post("/claim/:token/submit", express.json(), async (req, res) => {
       ],
     };
 
+    console.log("METADATA BEING MINTED:", JSON.stringify(metadata, null, 2));
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
       secretKey: THIRDWEB_SECRET_KEY,
     });
