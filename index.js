@@ -197,7 +197,8 @@ app.get("/claim/order/:orderId", async (req, res) => {
       headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
     });
     const productData = await productResponse.json();
-    itemNames.push(productData.product.title);
+    console.log("Product response:", JSON.stringify(productData));
+    itemNames.push(productData.product ? productData.product.title : 'Stiff Competition NFT');
   }
 
   const itemCountText = claims.length === 1 ? "1 NFT" : `${claims.length} NFTs`;
@@ -393,6 +394,7 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
         return field ? field.value : "";
       };
 
+      console.log("Product data in submit:", JSON.stringify(productData));
       const cloudinaryImageUrl = productData.product.image.src;
       const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
 
