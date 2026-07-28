@@ -141,7 +141,7 @@ app.post("/claim/order/:orderId/send-otp", express.json(), async (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-client-id": THIRDWEB_CLIENT_ID,
+        "x-secret-key": THIRDWEB_SECRET_KEY,
       },
       body: JSON.stringify({ type: "email", email }),
     });
@@ -163,7 +163,7 @@ app.post("/claim/order/:orderId/verify-otp", express.json(), async (req, res) =>
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-client-id": THIRDWEB_CLIENT_ID,
+        "x-secret-key": THIRDWEB_SECRET_KEY,
       },
       body: JSON.stringify({ type: "email", email, code }),
     });
