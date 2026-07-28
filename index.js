@@ -242,10 +242,20 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     if (result.rows.length === 0) {
       return res.json({ success: false, error: "Invalid or already claimed" });
     }
-    let mintAddress = walletAddress;
-    if (!mintAddress && email) {
-      mintAddress = email;
-    }
+let mintAddress = walletAddress;
+if (!mintAddress && email) {
+  const walletResponse = await fetch("https://api.thirdweb.com/v1/wallets/server", {
+    method: "POST",
+    headers: {
+      "x-secret-key": THIRDWEB_SECRET_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ identifier: email }),
+  });
+  const walletData = await walletResponse.json();
+  mintAddress = walletData.result.address;
+  console.log(`Created/retrieved wallet for ${email}: ${mintAddress}`);
+}
     if (!mintAddress) {
       return res.json({ success: false, error: "Please provide a wallet address or email" });
     }
@@ -311,7 +321,7 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
       mintedItems.push({ name: metadata.name, openseaUrl });
     }
 
-    res.json({ success: true, items: mintedItems });
+res.json({ success: true, walletAddress: mintAddress, usedEmail: !!email });
 
   } catch (error) {
     console.error("Minting error:", error);
