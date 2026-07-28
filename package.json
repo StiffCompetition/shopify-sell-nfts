@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "build": "cd client && npm install && npm run build",
     "start-localtunnel": "lt --port 3000"
   },
   "keywords": [],

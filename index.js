@@ -28,7 +28,11 @@ const privy = new PrivyClient({
   appSecret: PRIVY_APP_SECRET,
 });
 
+const path = require('path');
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
+
+// Serve React build
+app.use(express.static(path.join(__dirname, 'public')));
 
 async function initDB() {
   await pool.query(`
@@ -166,6 +170,31 @@ app.post("/webhooks/orders/create", async (req, res) => {
   }
 });
 
+// New endpoint: returns order details for the React claim page
+app.get("/claim/order/:orderId/details", async (req, res) => {
+  const { orderId } = req.params;
+  const result = await pool.query("SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
+  if (result.rows.length === 0) {
+    return res.json({ error: "Invalid or already claimed" });
+  }
+  const claims = result.rows;
+  const shopUrl = 'stiifcompnft.myshopify.com';
+  try {
+    const shopifyToken = await getShopifyToken();
+    const itemNames = [];
+    for (const claim of claims) {
+      const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}.json`, {
+        headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
+      });
+      const productData = await productResponse.json();
+      itemNames.push(productData.product ? productData.product.title : 'Stiff Competition NFT');
+    }
+    res.json({ items: itemNames });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 app.get("/claim/lookup/:orderId", async (req, res) => {
   const { orderId } = req.params;
   const result = await pool.query("SELECT claim_token FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
@@ -175,234 +204,9 @@ app.get("/claim/lookup/:orderId", async (req, res) => {
   res.redirect(`/claim/order/${orderId}`);
 });
 
-// Step 1: Send OTP via Thirdweb
-app.post("/claim/order/:orderId/send-otp", express.json(), async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.json({ success: false, error: "Email required" });
-  try {
-    const response = await fetch("https://api.thirdweb.com/v1/auth/initiate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-secret-key": THIRDWEB_SECRET_KEY,
-      },
-      body: JSON.stringify({ method: "email", email }),
-    });
-    const data = await response.json();
-    console.log("OTP send response:", JSON.stringify(data));
-    if (data.message && data.message.toLowerCase().includes('invalid')) {
-      return res.json({ success: false, error: "Could not send verification code — please try again" });
-    }
-    res.json({ success: true });
-  } catch (error) {
-    console.error("OTP send error:", error);
-    res.json({ success: false, error: error.message });
-  }
-});
-
-// Step 2: Verify OTP via Thirdweb, then create Privy wallet
-app.post("/claim/order/:orderId/verify-otp", express.json(), async (req, res) => {
-  const { email, code } = req.body;
-  if (!email || !code) return res.json({ success: false, error: "Email and code required" });
-  try {
-    // Verify OTP with Thirdweb
-    const response = await fetch("https://api.thirdweb.com/v1/auth/complete", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-secret-key": THIRDWEB_SECRET_KEY,
-      },
-      body: JSON.stringify({ method: "email", email, code }),
-    });
-    const data = await response.json();
-    console.log("OTP verify response:", JSON.stringify(data));
-
-    // Check for explicit error in response
-    if (data.message || data.error) {
-      const msg = data.message || data.error;
-      console.log("OTP verification failed:", msg);
-      return res.json({ success: false, error: "Invalid code — please check your email and try again" });
-    }
-
-    // Create or retrieve Privy wallet for this email
-    const walletAddress = await getOrCreatePrivyWallet(email);
-    res.json({ success: true, walletAddress });
-
-  } catch (error) {
-    console.error("OTP verify/wallet error:", error);
-    res.json({ success: false, error: error.message });
-  }
-});
-
-app.get("/claim/order/:orderId", async (req, res) => {
-  const { orderId } = req.params;
-  const result = await pool.query("SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
-  if (result.rows.length === 0) {
-    return res.send("<h1>Invalid or already claimed</h1>");
-  }
-  const claims = result.rows;
-
-  const shopUrl = 'stiifcompnft.myshopify.com';
-  const shopifyToken = await getShopifyToken();
-
-  const itemNames = [];
-  for (const claim of claims) {
-    const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}.json`, {
-      headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
-    });
-    const productData = await productResponse.json();
-    console.log("Product response on claim page:", JSON.stringify(productData));
-    itemNames.push(productData.product ? productData.product.title : 'Stiff Competition NFT');
-  }
-
-  const itemCountText = claims.length === 1 ? "1 NFT" : `${claims.length} NFTs`;
-  const itemListHtml = itemNames.map(name => `<li>${name}</li>`).join('');
-
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Claim Your Stiff Competition NFT${claims.length > 1 ? 's' : ''}</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>
-        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
-        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
-        button { width: 100%; padding: 12px; background: #000; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin: 5px 0; }
-        button:hover { background: #333; }
-        button:disabled { background: #999; cursor: not-allowed; }
-        .or { margin: 15px 0; color: #999; }
-        .message { margin-top: 20px; padding: 15px; border-radius: 4px; line-height: 1.6; }
-        .success { background: #d4edda; color: #155724; }
-        .error { background: #f8d7da; color: #721c24; }
-        .info { background: #d1ecf1; color: #0c5460; }
-        ul.items { text-align: left; margin: 15px 0; padding-left: 20px; }
-        .nft-link { display: block; margin: 8px 0; }
-        .hidden { display: none; }
-      </style>
-    </head>
-    <body>
-      <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style="max-width: 200px; margin-bottom: 20px;" />
-      <h1>🎉 Claim Your ${itemCountText}</h1>
-      <p>You've purchased ${itemCountText} from Stiff Competition! Choose how you'd like to receive ${claims.length === 1 ? 'it' : 'them'}.</p>
-      <ul class="items">${itemListHtml}</ul>
-
-      <div id="step-choose">
-        <h3>I have a crypto wallet</h3>
-        <input type="text" id="walletAddress" placeholder="Enter your wallet address (0x...)" />
-        <button onclick="claimWithWallet()">Claim to My Wallet</button>
-        <div class="or">— OR —</div>
-        <h3>Create a free wallet with my email</h3>
-        <p style="font-size:13px;color:#555;">No crypto knowledge needed. We'll create a secure digital wallet for you and send your NFT to it automatically. You'll receive a verification code by email.</p>
-        <input type="email" id="emailAddress" placeholder="Enter your email address" />
-        <button onclick="sendOTP()">Send Verification Code</button>
-      </div>
-
-      <div id="step-otp" class="hidden">
-        <h3>Check your email</h3>
-        <p id="otp-message"></p>
-        <input type="text" id="otpCode" placeholder="Enter your 6-digit code" maxlength="6" style="letter-spacing:6px;font-size:20px;text-align:center;" />
-        <button onclick="verifyOTP()">Verify & Claim My NFT</button>
-        <button onclick="backToStart()" style="background:#555;margin-top:5px;">← Back</button>
-      </div>
-
-      <div id="message"></div>
-
-      <script>
-        let pendingEmail = '';
-
-        async function claimWithWallet() {
-          const wallet = document.getElementById('walletAddress').value.trim();
-          if (!wallet) { showMessage('Please enter your wallet address', 'error'); return; }
-          await submitClaim(wallet, null);
-        }
-
-        async function sendOTP() {
-          const email = document.getElementById('emailAddress').value.trim();
-          if (!email) { showMessage('Please enter your email address', 'error'); return; }
-          pendingEmail = email;
-          disableButtons(true);
-          showMessage('Sending your verification code...', 'info');
-          const response = await fetch('/claim/order/${orderId}/send-otp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email })
-          });
-          const data = await response.json();
-          disableButtons(false);
-          if (data.success) {
-            document.getElementById('step-choose').classList.add('hidden');
-            document.getElementById('step-otp').classList.remove('hidden');
-            document.getElementById('otp-message').textContent = 'We sent a 6-digit verification code to ' + email + '. Please check your inbox (and spam folder). The code expires in 10 minutes.';
-            showMessage('', null);
-          } else {
-            showMessage('Could not send code: ' + data.error, 'error');
-          }
-        }
-
-        async function verifyOTP() {
-          const code = document.getElementById('otpCode').value.trim();
-          if (!code || code.length < 6) { showMessage('Please enter the 6-digit code from your email', 'error'); return; }
-          disableButtons(true);
-          showMessage('Verifying your code...', 'info');
-          const verifyResponse = await fetch('/claim/order/${orderId}/verify-otp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: pendingEmail, code })
-          });
-          const verifyData = await verifyResponse.json();
-          if (!verifyData.success) {
-            disableButtons(false);
-            showMessage(verifyData.error || 'Invalid code — please try again', 'error');
-            return;
-          }
-          showMessage('Code verified! Minting your NFT — this may take up to 2 minutes, please do not close this page...', 'info');
-          await submitClaim(verifyData.walletAddress, pendingEmail);
-        }
-
-        async function submitClaim(walletAddress, email) {
-          disableButtons(true);
-          const response = await fetch('/claim/order/${orderId}/submit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ walletAddress, email })
-          });
-          const data = await response.json();
-          if (data.success) {
-            const links = data.items.map(item =>
-              '<a class="nft-link" href="' + item.openseaUrl + '" target="_blank" style="color:#155724;font-weight:bold;">' + item.name + ' — View on OpenSea ↗</a>'
-            ).join('');
-            const walletMsg = email
-              ? '<br><br><strong>Your free wallet has been created!</strong><br>Visit <a href="https://home.privy.io" target="_blank" style="color:#155724;font-weight:bold;">home.privy.io</a> and sign in with <strong>' + email + '</strong> to access your wallet and manage your NFT.'
-              : '';
-            showMessage('🎉 Your NFT' + (data.items.length > 1 ? 's have' : ' has') + ' been minted and sent to your wallet!' + walletMsg + '<br><br>' + links, 'success');
-            document.getElementById('step-choose').classList.add('hidden');
-            document.getElementById('step-otp').classList.add('hidden');
-          } else {
-            disableButtons(false);
-            showMessage('Something went wrong: ' + data.error, 'error');
-          }
-        }
-
-        function backToStart() {
-          document.getElementById('step-choose').classList.remove('hidden');
-          document.getElementById('step-otp').classList.add('hidden');
-          document.getElementById('otpCode').value = '';
-          showMessage('', null);
-        }
-
-        function disableButtons(disabled) {
-          document.querySelectorAll('button').forEach(b => b.disabled = disabled);
-        }
-
-        function showMessage(msg, type) {
-          const el = document.getElementById('message');
-          el.className = 'message' + (type ? ' ' + type : '');
-          el.innerHTML = msg;
-        }
-      </script>
-    </body>
-    </html>
-  `);
+// Serve React app for claim pages
+app.get("/claim/order/:orderId", (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
