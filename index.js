@@ -108,28 +108,33 @@ async function uploadMetadataToIPFS(metadata) {
 }
 
 // Create or retrieve Privy wallet for a given email
+const { NotFoundError } = require('@privy-io/node');
+
 async function getOrCreatePrivyWallet(email) {
   // Try to find existing Privy user by email
+  let existingUser = null;
   try {
-    const existingUser = await privy.getUserByEmail(email);
-    if (existingUser) {
-      const existingWallet = existingUser.linkedAccounts.find(a => a.type === 'wallet' && a.chainType === 'ethereum');
-      if (existingWallet && existingWallet.address) {
-        console.log(`Found existing Privy wallet for ${email}: ${existingWallet.address}`);
-        return existingWallet.address;
-      }
-    }
+    existingUser = await privy.users().getByEmailAddress({ address: email });
   } catch (e) {
+    if (!(e instanceof NotFoundError)) throw e;
     console.log(`No existing Privy user found for ${email}, creating new one`);
   }
 
+  if (existingUser) {
+    const existingWallet = existingUser.linked_accounts.find(a => a.type === 'wallet' && a.chain_type === 'ethereum');
+    if (existingWallet && existingWallet.address) {
+      console.log(`Found existing Privy wallet for ${email}: ${existingWallet.address}`);
+      return existingWallet.address;
+    }
+  }
+
   // Create new Privy user with email and Ethereum wallet
-  const newUser = await privy.importUser({
-    linkedAccounts: [{ type: 'email', address: email }],
-    createEthereumWallet: true,
+  const newUser = await privy.users().create({
+    linked_accounts: [{ type: 'email', address: email }],
+    wallets: [{ chain_type: 'ethereum' }],
   });
 
-  const wallet = newUser.linkedAccounts.find(a => a.type === 'wallet' && a.chainType === 'ethereum');
+  const wallet = newUser.linked_accounts.find(a => a.type === 'wallet' && a.chain_type === 'ethereum');
   if (!wallet || !wallet.address) {
     throw new Error('Privy wallet creation failed — no wallet address returned');
   }
