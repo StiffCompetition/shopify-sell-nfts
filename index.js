@@ -143,7 +143,7 @@ app.post("/claim/order/:orderId/send-otp", express.json(), async (req, res) => {
         "Content-Type": "application/json",
         "x-secret-key": THIRDWEB_SECRET_KEY,
       },
-      body: JSON.stringify({ type: "email", email }),
+      body: JSON.stringify({ method: "email", email }),
     });
     const data = await response.json();
     console.log("OTP send response:", JSON.stringify(data));
@@ -165,7 +165,7 @@ app.post("/claim/order/:orderId/verify-otp", express.json(), async (req, res) =>
         "Content-Type": "application/json",
         "x-secret-key": THIRDWEB_SECRET_KEY,
       },
-      body: JSON.stringify({ type: "email", email, code }),
+      body: JSON.stringify({ method: "email", email, code }),
     });
     const data = await response.json();
     console.log("OTP verify response:", JSON.stringify(data));
