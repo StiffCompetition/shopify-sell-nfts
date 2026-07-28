@@ -38,10 +38,6 @@ async function initDB() {
 }
 initDB();
 
-// Retries a fetch call on transient network errors (e.g. "Premature close",
-// ECONNRESET) before giving up. Does NOT retry on a successful HTTP response,
-// even if that response is an error status — those are returned normally
-// so calling code can inspect them.
 async function fetchWithRetry(url, options, retries = 3, delayMs = 1000) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -127,7 +123,6 @@ app.post("/webhooks/orders/create", async (req, res) => {
   }
 });
 
-// Lookup claims by order ID and redirect to the order claim page
 app.get("/claim/lookup/:orderId", async (req, res) => {
   const { orderId } = req.params;
   const result = await pool.query("SELECT claim_token FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
@@ -217,7 +212,10 @@ app.get("/claim/order/:orderId", async (req, res) => {
             const links = data.items.map(item =>
               '<a class="nft-link" href="' + item.openseaUrl + '" target="_blank" style="color:#000;text-decoration:underline;">' + item.name + ' — View on OpenSea</a>'
             ).join('');
-            showMessage('🎉 Your NFT' + (data.items.length > 1 ? 's have' : ' has') + ' been minted and sent to your wallet!' + links, true);
+            const walletMsg = data.usedEmail
+              ? '<br><br>A wallet has been created for you. <a href="https://thirdweb.com/wallet" target="_blank" style="color:#155724;font-weight:bold;">Visit thirdweb.com/wallet</a> and sign in with your email to access it and view your NFT on OpenSea.'
+              : '';
+            showMessage('🎉 Your NFT' + (data.items.length > 1 ? 's have' : ' has') + ' been minted and sent to your wallet!' + walletMsg + '<br>' + links, true);
           } else {
             showMessage('Something went wrong: ' + data.error, false);
             btn.forEach(b => b.disabled = false);
@@ -242,20 +240,22 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     if (result.rows.length === 0) {
       return res.json({ success: false, error: "Invalid or already claimed" });
     }
-let mintAddress = walletAddress;
-if (!mintAddress && email) {
-  const walletResponse = await fetch("https://api.thirdweb.com/v1/wallets/server", {
-    method: "POST",
-    headers: {
-      "x-secret-key": THIRDWEB_SECRET_KEY,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ identifier: email }),
-  });
-  const walletData = await walletResponse.json();
-  mintAddress = walletData.result.address;
-  console.log(`Created/retrieved wallet for ${email}: ${mintAddress}`);
-}
+
+    let mintAddress = walletAddress;
+    if (!mintAddress && email) {
+      const walletResponse = await fetch("https://api.thirdweb.com/v1/wallets/server", {
+        method: "POST",
+        headers: {
+          "x-secret-key": THIRDWEB_SECRET_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ identifier: email }),
+      });
+      const walletData = await walletResponse.json();
+      mintAddress = walletData.result.address;
+      console.log(`Created/retrieved wallet for ${email}: ${mintAddress}`);
+    }
+
     if (!mintAddress) {
       return res.json({ success: false, error: "Please provide a wallet address or email" });
     }
@@ -321,7 +321,7 @@ if (!mintAddress && email) {
       mintedItems.push({ name: metadata.name, openseaUrl });
     }
 
-res.json({ success: true, walletAddress: mintAddress, usedEmail: !!email });
+    res.json({ success: true, items: mintedItems, walletAddress: mintAddress, usedEmail: !!email });
 
   } catch (error) {
     console.error("Minting error:", error);
@@ -329,5 +329,4 @@ res.json({ success: true, walletAddress: mintAddress, usedEmail: !!email });
   }
 });
 
-// Start server
 app.listen(3000, () => console.log("Server running on port 3000!"));
