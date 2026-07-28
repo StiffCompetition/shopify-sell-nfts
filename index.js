@@ -3,6 +3,7 @@ const app = express();
 const getRawBody = require("raw-body");
 const crypto = require("crypto");
 const { ThirdwebSDK } = require("@thirdweb-dev/sdk");
+const { PrivyClient } = require("@privy-io/node");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
 const { Pool } = require("pg");
@@ -16,10 +17,16 @@ const {
   SHOPIFY_ACCESS_TOKEN,
   SHOPIFY_CLIENT_ID,
   THIRDWEB_SECRET_KEY,
-  THIRDWEB_CLIENT_ID,
   PINATA_JWT,
   DATABASE_URL,
+  PRIVY_APP_ID,
+  PRIVY_APP_SECRET,
 } = process.env;
+
+const privy = new PrivyClient({
+  appId: PRIVY_APP_ID,
+  appSecret: PRIVY_APP_SECRET,
+});
 
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
@@ -100,6 +107,37 @@ async function uploadMetadataToIPFS(metadata) {
   return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
 }
 
+// Create or retrieve Privy wallet for a given email
+async function getOrCreatePrivyWallet(email) {
+  // Try to find existing Privy user by email
+  try {
+    const existingUser = await privy.getUserByEmail(email);
+    if (existingUser) {
+      const existingWallet = existingUser.linkedAccounts.find(a => a.type === 'wallet' && a.chainType === 'ethereum');
+      if (existingWallet && existingWallet.address) {
+        console.log(`Found existing Privy wallet for ${email}: ${existingWallet.address}`);
+        return existingWallet.address;
+      }
+    }
+  } catch (e) {
+    console.log(`No existing Privy user found for ${email}, creating new one`);
+  }
+
+  // Create new Privy user with email and Ethereum wallet
+  const newUser = await privy.importUser({
+    linkedAccounts: [{ type: 'email', address: email }],
+    createEthereumWallet: true,
+  });
+
+  const wallet = newUser.linkedAccounts.find(a => a.type === 'wallet' && a.chainType === 'ethereum');
+  if (!wallet || !wallet.address) {
+    throw new Error('Privy wallet creation failed — no wallet address returned');
+  }
+
+  console.log(`Created new Privy wallet for ${email}: ${wallet.address}`);
+  return wallet.address;
+}
+
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
   const hmac = req.get("X-Shopify-Hmac-Sha256");
@@ -132,7 +170,7 @@ app.get("/claim/lookup/:orderId", async (req, res) => {
   res.redirect(`/claim/order/${orderId}`);
 });
 
-// Send OTP to email via Thirdweb
+// Step 1: Send OTP via Thirdweb
 app.post("/claim/order/:orderId/send-otp", express.json(), async (req, res) => {
   const { email } = req.body;
   if (!email) return res.json({ success: false, error: "Email required" });
@@ -147,6 +185,9 @@ app.post("/claim/order/:orderId/send-otp", express.json(), async (req, res) => {
     });
     const data = await response.json();
     console.log("OTP send response:", JSON.stringify(data));
+    if (data.message && data.message.toLowerCase().includes('invalid')) {
+      return res.json({ success: false, error: "Could not send verification code — please try again" });
+    }
     res.json({ success: true });
   } catch (error) {
     console.error("OTP send error:", error);
@@ -154,11 +195,12 @@ app.post("/claim/order/:orderId/send-otp", express.json(), async (req, res) => {
   }
 });
 
-// Verify OTP and get wallet address
+// Step 2: Verify OTP via Thirdweb, then create Privy wallet
 app.post("/claim/order/:orderId/verify-otp", express.json(), async (req, res) => {
   const { email, code } = req.body;
   if (!email || !code) return res.json({ success: false, error: "Email and code required" });
   try {
+    // Verify OTP with Thirdweb
     const response = await fetch("https://api.thirdweb.com/v1/auth/complete", {
       method: "POST",
       headers: {
@@ -169,13 +211,20 @@ app.post("/claim/order/:orderId/verify-otp", express.json(), async (req, res) =>
     });
     const data = await response.json();
     console.log("OTP verify response:", JSON.stringify(data));
-    if (data.walletAddress) {
-      res.json({ success: true, walletAddress: data.walletAddress });
-    } else {
-      res.json({ success: false, error: "Invalid code — please try again" });
+
+    // Check for explicit error in response
+    if (data.message || data.error) {
+      const msg = data.message || data.error;
+      console.log("OTP verification failed:", msg);
+      return res.json({ success: false, error: "Invalid code — please check your email and try again" });
     }
+
+    // Create or retrieve Privy wallet for this email
+    const walletAddress = await getOrCreatePrivyWallet(email);
+    res.json({ success: true, walletAddress });
+
   } catch (error) {
-    console.error("OTP verify error:", error);
+    console.error("OTP verify/wallet error:", error);
     res.json({ success: false, error: error.message });
   }
 });
@@ -193,11 +242,11 @@ app.get("/claim/order/:orderId", async (req, res) => {
 
   const itemNames = [];
   for (const claim of claims) {
-    const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
+    const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}.json`, {
       headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
     });
     const productData = await productResponse.json();
-    console.log("Product response:", JSON.stringify(productData));
+    console.log("Product response on claim page:", JSON.stringify(productData));
     itemNames.push(productData.product ? productData.product.title : 'Stiff Competition NFT');
   }
 
@@ -222,9 +271,8 @@ app.get("/claim/order/:orderId", async (req, res) => {
         .error { background: #f8d7da; color: #721c24; }
         .info { background: #d1ecf1; color: #0c5460; }
         ul.items { text-align: left; margin: 15px 0; padding-left: 20px; }
-        .nft-link { display: block; margin: 6px 0; }
+        .nft-link { display: block; margin: 8px 0; }
         .hidden { display: none; }
-        .step { margin-top: 10px; }
       </style>
     </head>
     <body>
@@ -239,7 +287,7 @@ app.get("/claim/order/:orderId", async (req, res) => {
         <button onclick="claimWithWallet()">Claim to My Wallet</button>
         <div class="or">— OR —</div>
         <h3>Create a free wallet with my email</h3>
-        <p style="font-size:13px;color:#555;">No crypto knowledge needed. We'll create a secure digital wallet for you and send your NFT to it automatically.</p>
+        <p style="font-size:13px;color:#555;">No crypto knowledge needed. We'll create a secure digital wallet for you and send your NFT to it automatically. You'll receive a verification code by email.</p>
         <input type="email" id="emailAddress" placeholder="Enter your email address" />
         <button onclick="sendOTP()">Send Verification Code</button>
       </div>
@@ -279,7 +327,7 @@ app.get("/claim/order/:orderId", async (req, res) => {
           if (data.success) {
             document.getElementById('step-choose').classList.add('hidden');
             document.getElementById('step-otp').classList.remove('hidden');
-            document.getElementById('otp-message').textContent = 'We sent a 6-digit verification code to ' + email + '. Please check your inbox (and spam folder).';
+            document.getElementById('otp-message').textContent = 'We sent a 6-digit verification code to ' + email + '. Please check your inbox (and spam folder). The code expires in 10 minutes.';
             showMessage('', null);
           } else {
             showMessage('Could not send code: ' + data.error, 'error');
@@ -302,7 +350,7 @@ app.get("/claim/order/:orderId", async (req, res) => {
             showMessage(verifyData.error || 'Invalid code — please try again', 'error');
             return;
           }
-          showMessage('Code verified! Minting your NFT — this may take a moment...', 'info');
+          showMessage('Code verified! Minting your NFT — this may take up to 2 minutes, please do not close this page...', 'info');
           await submitClaim(verifyData.walletAddress, pendingEmail);
         }
 
@@ -319,7 +367,7 @@ app.get("/claim/order/:orderId", async (req, res) => {
               '<a class="nft-link" href="' + item.openseaUrl + '" target="_blank" style="color:#155724;font-weight:bold;">' + item.name + ' — View on OpenSea ↗</a>'
             ).join('');
             const walletMsg = email
-              ? '<br><br><strong>Your new wallet address:</strong><br><code style="font-size:12px;word-break:break-all;">' + data.walletAddress + '</code><br><br>To access your wallet in future, visit <a href="https://thirdweb.com" target="_blank" style="color:#155724;">thirdweb.com</a> and sign in with your email address <strong>' + email + '</strong>.'
+              ? '<br><br><strong>Your free wallet has been created!</strong><br>Visit <a href="https://home.privy.io" target="_blank" style="color:#155724;font-weight:bold;">home.privy.io</a> and sign in with <strong>' + email + '</strong> to access your wallet and manage your NFT.'
               : '';
             showMessage('🎉 Your NFT' + (data.items.length > 1 ? 's have' : ' has') + ' been minted and sent to your wallet!' + walletMsg + '<br><br>' + links, 'success');
             document.getElementById('step-choose').classList.add('hidden');
@@ -377,25 +425,35 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     const mintedItems = [];
 
     for (const claim of result.rows) {
-      const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}.json`, {
+      const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}.json`, {
         headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
       });
       const productData = await productResponse.json();
+      console.log("Product data in submit:", JSON.stringify(productData));
 
-      const metafieldsResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2022-07/products/${claim.product_id}/metafields.json`, {
+      if (!productData.product) {
+        throw new Error(`Product not found for ID ${claim.product_id}: ${JSON.stringify(productData)}`);
+      }
+
+      const cloudinaryImageUrl = (productData.product.image && productData.product.image.src)
+        || (productData.product.images && productData.product.images[0] && productData.product.images[0].src);
+
+      if (!cloudinaryImageUrl) {
+        throw new Error(`No image found for product ${claim.product_id}`);
+      }
+
+      const metafieldsResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}/metafields.json`, {
         headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
       });
       const metafieldsData = await metafieldsResponse.json();
-
       const metafields = metafieldsData.metafields;
       console.log("ALL METAFIELDS for product", claim.product_id, ":", JSON.stringify(metafields, null, 2));
+
       const getMeta = (key, namespace = "verisart") => {
         const field = metafields.find((m) => m.namespace === namespace && m.key === key);
         return field ? field.value : "";
       };
 
-      console.log("Product data in submit:", JSON.stringify(productData));
-      const cloudinaryImageUrl = productData.product.image.src;
       const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
 
       const metadata = {
