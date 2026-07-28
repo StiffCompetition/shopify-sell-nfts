@@ -188,7 +188,7 @@ app.get("/claim/order/:orderId", async (req, res) => {
   }
   const claims = result.rows;
 
-  const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const shopUrl = 'stiifcompnft.myshopify.com';
   const shopifyToken = await getShopifyToken();
 
   const itemNames = [];
@@ -365,7 +365,7 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
       return res.json({ success: false, error: "No wallet address provided" });
     }
 
-    const shopUrl = SHOPIFY_SITE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const shopUrl = 'stiifcompnft.myshopify.com';
     const shopifyToken = await getShopifyToken();
 
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
