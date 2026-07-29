@@ -162,6 +162,11 @@ app.get("/claim/lookup/:orderId", async (req, res) => {
   res.redirect(`/claim/order/${orderId}`);
 });
 
+// Serve React app for wallet page
+app.get("/my-wallet", (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // Serve React app for claim pages
 app.get("/claim/order/:orderId", (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
