@@ -20,7 +20,6 @@ const {
   DATABASE_URL,
 } = process.env;
 
-
 const path = require('path');
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
@@ -103,7 +102,6 @@ async function uploadMetadataToIPFS(metadata) {
   const pinataData = await pinataResponse.json();
   return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
 }
-
 
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
