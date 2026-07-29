@@ -160,13 +160,15 @@ export default function ClaimPage({ orderId }) {
         <div style={styles.success}>
           <p>🎉 Your {mintedItems.length > 1 ? 'NFTs have' : 'NFT has'} been minted and sent to your wallet!</p>
           {usedEmail && (
-            <p style={{ marginTop: 12 }}>
-              <strong>Your free wallet has been created.</strong> Sign in at{' '}
-              <a href="https://thirdweb.com/wallet" target="_blank" rel="noreferrer" style={styles.link}>
-                thirdweb.com/wallet
-              </a>{' '}
-              with <strong>{usedEmail}</strong> to access it and connect to OpenSea, Discord, and anywhere else that supports WalletConnect.
-            </p>
+            <div style={{ marginTop: 12 }}>
+              <strong>Your free wallet has been created.</strong>
+              <div style={{ marginTop: 10 }}>
+                <a href={`/my-wallet?email=${encodeURIComponent(usedEmail)}`}
+                  style={{ display: 'inline-block', padding: '10px 20px', background: '#000', color: '#fff', borderRadius: 4, textDecoration: 'none', fontWeight: 'bold' }}>
+                  Access My Wallet ↗
+                </a>
+              </div>
+            </div>
           )}
           {mintedItems.length > 0 && (
             <div style={{ marginTop: 12 }}>
