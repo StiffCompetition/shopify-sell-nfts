@@ -20,12 +20,8 @@ const {
   DATABASE_URL,
 } = process.env;
 
-
 const path = require('path');
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
-
-// Serve React build
-app.use(express.static(path.join(__dirname, 'public')));
 
 async function initDB() {
   await pool.query(`
@@ -104,7 +100,6 @@ async function uploadMetadataToIPFS(metadata) {
   return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
 }
 
-
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
   const hmac = req.get("X-Shopify-Hmac-Sha256");
@@ -160,11 +155,6 @@ app.get("/claim/lookup/:orderId", async (req, res) => {
     return res.send("<h1>Invalid or already claimed</h1>");
   }
   res.redirect(`/claim/order/${orderId}`);
-});
-
-// Serve React app for claim pages
-app.get("/claim/order/:orderId", (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
@@ -259,6 +249,12 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     console.error("Minting error:", error);
     res.json({ success: false, error: error.message });
   }
+});
+
+// Serve React build and catch-all for client-side routing
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(3000, () => console.log("Server running on port 3000!"));
