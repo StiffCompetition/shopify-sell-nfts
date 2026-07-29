@@ -3,7 +3,6 @@ const app = express();
 const getRawBody = require("raw-body");
 const crypto = require("crypto");
 const { ThirdwebSDK } = require("@thirdweb-dev/sdk");
-const { PrivyClient } = require("@privy-io/node");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
 const { Pool } = require("pg");
@@ -19,14 +18,8 @@ const {
   THIRDWEB_SECRET_KEY,
   PINATA_JWT,
   DATABASE_URL,
-  PRIVY_APP_ID,
-  PRIVY_APP_SECRET,
 } = process.env;
 
-const privy = new PrivyClient({
-  appId: PRIVY_APP_ID,
-  appSecret: PRIVY_APP_SECRET,
-});
 
 const path = require('path');
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
@@ -111,41 +104,6 @@ async function uploadMetadataToIPFS(metadata) {
   return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
 }
 
-// Create or retrieve Privy wallet for a given email
-const { NotFoundError } = require('@privy-io/node');
-
-async function getOrCreatePrivyWallet(email) {
-  // Try to find existing Privy user by email
-  let existingUser = null;
-  try {
-    existingUser = await privy.users().getByEmailAddress({ address: email });
-  } catch (e) {
-    if (!(e instanceof NotFoundError)) throw e;
-    console.log(`No existing Privy user found for ${email}, creating new one`);
-  }
-
-  if (existingUser) {
-    const existingWallet = existingUser.linked_accounts.find(a => a.type === 'wallet' && a.chain_type === 'ethereum');
-    if (existingWallet && existingWallet.address) {
-      console.log(`Found existing Privy wallet for ${email}: ${existingWallet.address}`);
-      return existingWallet.address;
-    }
-  }
-
-  // Create new Privy user with email and Ethereum wallet
-  const newUser = await privy.users().create({
-    linked_accounts: [{ type: 'email', address: email }],
-    wallets: [{ chain_type: 'ethereum' }],
-  });
-
-  const wallet = newUser.linked_accounts.find(a => a.type === 'wallet' && a.chain_type === 'ethereum');
-  if (!wallet || !wallet.address) {
-    throw new Error('Privy wallet creation failed — no wallet address returned');
-  }
-
-  console.log(`Created new Privy wallet for ${email}: ${wallet.address}`);
-  return wallet.address;
-}
 
 app.post("/webhooks/orders/create", async (req, res) => {
   console.log("Order event received!");
