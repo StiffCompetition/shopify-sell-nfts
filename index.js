@@ -217,16 +217,18 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
         name: productData.product.title,
         description: productData.product.body_html.replace(/<[^>]*>/g, ''),
         image: ipfsImageUrl,
-        attributes: [
-          { trait_type: "Character", value: getMeta("character", "custom") },
-          { trait_type: "Theme", value: getMeta("gimmick", "custom") },
-          { trait_type: "Collection", value: getMeta("inspection_grade") },
-          { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
-          { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
-          { trait_type: "Friction Force", value: getMeta("friction_force") },
-          { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
-          { trait_type: "Lore", value: getMeta("expanded_lore", "custom") },
-        ],
+attributes: [
+  { trait_type: "Character", value: getMeta("character", "custom") },
+  { trait_type: "Theme", value: getMeta("gimmick", "custom") },
+  { trait_type: "Collection", value: getMeta("collection", "custom") },
+  { trait_type: "Grade", value: getMeta("grade", "custom") },
+  { trait_type: "Volume", value: getMeta("volume", "custom") },
+  { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
+  { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
+  { trait_type: "Friction Force", value: getMeta("friction_force") },
+  { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
+  { trait_type: "Lore", value: getMeta("expanded_lore", "custom") },
+],
       };
 
       console.log("METADATA BEING MINTED:", JSON.stringify(metadata, null, 2));
