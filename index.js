@@ -18,10 +18,20 @@ const {
   THIRDWEB_SECRET_KEY,
   PINATA_JWT,
   DATABASE_URL,
+  MINTING_ENABLED,
 } = process.env;
 
 const path = require('path');
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
+
+const SHOP_URL = 'stiifcompnft.myshopify.com';
+const API_VERSION = '2025-10';
+const NFT_PRODUCT_TYPE = 'NFT';
+
+// Kill switch. Set MINTING_ENABLED=false in Railway to halt all minting immediately.
+function mintingEnabled() {
+  return String(MINTING_ENABLED || 'true').toLowerCase() !== 'false';
+}
 
 async function initDB() {
   await pool.query(`
@@ -35,6 +45,25 @@ async function initDB() {
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
+
+  await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1`);
+
+  // Idempotency. One claim row per product per order, so a repeated webhook
+  // delivery can never create a second claim and mint a duplicate NFT.
+  // Guarded so historic duplicates cannot stop the service booting.
+  try {
+    await pool.query(
+      `ALTER TABLE claims ADD CONSTRAINT claims_order_product_unique UNIQUE (order_id, product_id)`
+    );
+    console.log("Idempotency constraint applied.");
+  } catch (e) {
+    if (e.code === '42710' || e.code === '42P07') {
+      console.log("Idempotency constraint already present.");
+    } else {
+      console.warn("Idempotency constraint NOT applied — clear duplicate rows first:", e.message);
+    }
+  }
+
   console.log("Database ready!");
 }
 initDB();
@@ -52,7 +81,7 @@ async function fetchWithRetry(url, options, retries = 3, delayMs = 1000) {
 }
 
 async function getShopifyToken() {
-  const response = await fetchWithRetry(`https://stiifcompnft.myshopify.com/admin/oauth/access_token`, {
+  const response = await fetchWithRetry(`https://${SHOP_URL}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept-Encoding": "identity" },
     body: new URLSearchParams({
@@ -62,13 +91,69 @@ async function getShopifyToken() {
     }).toString()
   });
   const data = await response.json();
-  console.log("Token response:", JSON.stringify(data));
+  if (!data.access_token) console.error("Shopify token request failed:", JSON.stringify(data));
   return data.access_token;
 }
 
-function ipfsToGatewayUrl(ipfsUri) {
-  return ipfsUri.replace("ipfs://", "https://gateway.pinata.cloud/ipfs/");
+async function shopifyGet(pathname, token) {
+  const response = await fetchWithRetry(`https://${SHOP_URL}/admin/api/${API_VERSION}/${pathname}`, {
+    headers: {
+      'X-Shopify-Access-Token': token,
+      'Content-Type': 'application/json',
+      'Accept-Encoding': 'identity',
+    }
+  });
+  return response.json();
 }
+
+// ---------- email helpers ----------
+
+function normaliseEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+// j••••@gmail.com — enough for the buyer to recognise, not enough to guess.
+function maskEmail(value) {
+  const email = normaliseEmail(value);
+  const at = email.indexOf('@');
+  if (at < 1) return '';
+  const name = email.slice(0, at);
+  const domain = email.slice(at);
+  return `${name.slice(0, 1)}${'•'.repeat(Math.max(name.length - 1, 3))}${domain}`;
+}
+
+// ---------- attempt limiting ----------
+// Order IDs are short and guessable, so the buyer's email is the secret that
+// protects the claim. This stops that secret being found by repetition.
+
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MS = 60 * 60 * 1000;
+const attempts = new Map();
+
+function isLockedOut(orderId) {
+  const record = attempts.get(orderId);
+  if (!record) return false;
+  if (Date.now() - record.first > LOCKOUT_MS) {
+    attempts.delete(orderId);
+    return false;
+  }
+  return record.count >= MAX_ATTEMPTS;
+}
+
+function recordFailure(orderId) {
+  const record = attempts.get(orderId);
+  if (!record || Date.now() - record.first > LOCKOUT_MS) {
+    attempts.set(orderId, { count: 1, first: Date.now() });
+  } else {
+    record.count += 1;
+  }
+}
+
+function clearFailures(orderId) {
+  attempts.delete(orderId);
+}
+
+// ---------- IPFS ----------
 
 async function uploadImageToIPFS(imageUrl) {
   const imageResponse = await fetchWithRetry(imageUrl);
@@ -83,7 +168,9 @@ async function uploadImageToIPFS(imageUrl) {
     body: formData,
   });
   const pinataData = await pinataResponse.json();
-  return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
+  if (!pinataData.IpfsHash) throw new Error(`Pinata image upload failed: ${JSON.stringify(pinataData)}`);
+  // Written on chain as ipfs:// so the token never depends on one gateway staying up.
+  return `ipfs://${pinataData.IpfsHash}`;
 }
 
 async function uploadMetadataToIPFS(metadata) {
@@ -97,81 +184,139 @@ async function uploadMetadataToIPFS(metadata) {
     body: JSON.stringify({ pinataContent: metadata }),
   });
   const pinataData = await pinataResponse.json();
-  return ipfsToGatewayUrl(`ipfs://${pinataData.IpfsHash}`);
+  if (!pinataData.IpfsHash) throw new Error(`Pinata metadata upload failed: ${JSON.stringify(pinataData)}`);
+  return `ipfs://${pinataData.IpfsHash}`;
 }
 
+// ---------- webhook ----------
+
 app.post("/webhooks/orders/create", async (req, res) => {
-  console.log("Order event received!");
   const hmac = req.get("X-Shopify-Hmac-Sha256");
   const body = await getRawBody(req);
   const hash = crypto.createHmac("sha256", SHOPIFY_SECRET_KEY).update(body, "utf8", "hex").digest("base64");
-  if (hash === hmac) {
+
+  let valid = false;
+  try {
+    const a = Buffer.from(hash, 'utf8');
+    const b = Buffer.from(String(hmac || ''), 'utf8');
+    valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch (e) {
+    valid = false;
+  }
+
+  if (!valid) return res.sendStatus(403);
+
+  // Acknowledge immediately. Shopify retries slow responses, and a retry landing
+  // mid-processing is what creates duplicate claims.
+  res.sendStatus(200);
+
+  try {
     const orderData = JSON.parse(body);
-    const itemsPurchased = orderData.line_items;
+    const orderId = orderData.id.toString();
     const customerEmail = orderData.email;
-    for (const item of itemsPurchased) {
+    const token = await getShopifyToken();
+
+    for (const item of orderData.line_items) {
+      if (!item.product_id) continue;
+
+      // Order webhooks do not carry product type, so it is read from the product.
+      const productData = await shopifyGet(`products/${item.product_id}.json`, token);
+      const productType = productData.product ? productData.product.product_type : null;
+
+      if (productType !== NFT_PRODUCT_TYPE) {
+        console.log(`Order ${orderId}: skipping non-NFT product ${item.product_id} (${productType})`);
+        continue;
+      }
+
       const claimToken = crypto.randomBytes(32).toString("hex");
       await pool.query(
-        "INSERT INTO claims (claim_token, order_id, product_id, customer_email) VALUES ($1, $2, $3, $4) ON CONFLICT (claim_token) DO NOTHING",
-        [claimToken, orderData.id.toString(), item.product_id.toString(), customerEmail]
+        `INSERT INTO claims (claim_token, order_id, product_id, customer_email, quantity)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (order_id, product_id) DO NOTHING`,
+        [claimToken, orderId, item.product_id.toString(), customerEmail, item.quantity || 1]
       );
-      console.log(`Claim token created: ${claimToken} for product ${item.product_id}`);
+      console.log(`Order ${orderId}: claim ready for product ${item.product_id} x${item.quantity || 1}`);
     }
-    res.sendStatus(200);
-  } else {
-    res.sendStatus(403);
+  } catch (error) {
+    console.error("Webhook processing error:", error);
   }
 });
 
-// New endpoint: returns order details for the React claim page
+// ---------- claim ----------
+
+app.get("/claim/lookup/:orderId", async (req, res) => {
+  // Always hand off to the React app so every outcome is branded.
+  res.redirect(`/claim/order/${req.params.orderId}`);
+});
+
 app.get("/claim/order/:orderId/details", async (req, res) => {
   const { orderId } = req.params;
-  const result = await pool.query("SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
-  if (result.rows.length === 0) {
-    return res.json({ error: "Invalid or already claimed" });
-  }
-  const claims = result.rows;
-  const shopUrl = 'stiifcompnft.myshopify.com';
   try {
-    const shopifyToken = await getShopifyToken();
+    const result = await pool.query(
+      "SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE",
+      [orderId]
+    );
+    if (result.rows.length === 0) {
+      return res.json({ error: "Invalid or already claimed" });
+    }
+
+    const token = await getShopifyToken();
     const itemNames = [];
-    for (const claim of claims) {
-      const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}.json`, {
-        headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
-      });
-      const productData = await productResponse.json();
+    for (const claim of result.rows) {
+      const productData = await shopifyGet(`products/${claim.product_id}.json`, token);
       itemNames.push(productData.product ? productData.product.title : 'Stiff Competition NFT');
     }
-    res.json({ items: itemNames });
+
+    res.json({
+      items: itemNames,
+      emailHint: maskEmail(result.rows[0].customer_email),
+      locked: isLockedOut(orderId),
+    });
   } catch (e) {
     res.json({ error: e.message });
   }
 });
 
-app.get("/claim/lookup/:orderId", async (req, res) => {
-  const { orderId } = req.params;
-  const result = await pool.query("SELECT claim_token FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
-  if (result.rows.length === 0) {
-    return res.send("<h1>Invalid or already claimed</h1>");
-  }
-  res.redirect(`/claim/order/${orderId}`);
-});
-
 app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
   const { orderId } = req.params;
   const { walletAddress, email } = req.body;
+
   try {
-    const result = await pool.query("SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE", [orderId]);
+    if (!mintingEnabled()) {
+      return res.json({ success: false, error: "Claiming is temporarily unavailable. Please try again shortly." });
+    }
+
+    if (isLockedOut(orderId)) {
+      return res.json({ success: false, error: "Too many attempts. Please try again in an hour, or contact hq@stiffcompetition.shop." });
+    }
+
+    const result = await pool.query(
+      "SELECT * FROM claims WHERE order_id = $1 AND claimed = FALSE",
+      [orderId]
+    );
     if (result.rows.length === 0) {
       return res.json({ success: false, error: "Invalid or already claimed" });
     }
 
+    // The claim link only ever appears in the order confirmation email, so the
+    // buyer's own address is proof they received it. Without this check, a guessed
+    // order ID mints to whatever wallet the caller supplies.
+    const supplied = normaliseEmail(email);
+    const onOrder = normaliseEmail(result.rows[0].customer_email);
+    if (!supplied || supplied !== onOrder) {
+      recordFailure(orderId);
+      return res.json({
+        success: false,
+        error: "That email doesn't match the one on this order. Please use the address your order confirmation was sent to.",
+      });
+    }
+    clearFailures(orderId);
+
     const mintAddress = walletAddress;
-    if (!mintAddress) {
-      return res.json({ success: false, error: "No wallet address provided" });
+    if (!mintAddress || !/^0x[a-fA-F0-9]{40}$/.test(mintAddress)) {
+      return res.json({ success: false, error: "That wallet address doesn't look right — it should start with 0x and be 42 characters long." });
     }
 
-    const shopUrl = 'stiifcompnft.myshopify.com';
     const shopifyToken = await getShopifyToken();
 
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
@@ -182,14 +327,10 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     const mintedItems = [];
 
     for (const claim of result.rows) {
-      const productResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}.json`, {
-        headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
-      });
-      const productData = await productResponse.json();
-      console.log("Product data in submit:", JSON.stringify(productData));
+      const productData = await shopifyGet(`products/${claim.product_id}.json`, shopifyToken);
 
       if (!productData.product) {
-        throw new Error(`Product not found for ID ${claim.product_id}: ${JSON.stringify(productData)}`);
+        throw new Error(`Product not found for ID ${claim.product_id}`);
       }
 
       const cloudinaryImageUrl = (productData.product.image && productData.product.image.src)
@@ -199,12 +340,8 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
         throw new Error(`No image found for product ${claim.product_id}`);
       }
 
-      const metafieldsResponse = await fetchWithRetry(`https://${shopUrl}/admin/api/2024-01/products/${claim.product_id}/metafields.json`, {
-        headers: { 'X-Shopify-Access-Token': shopifyToken, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' }
-      });
-      const metafieldsData = await metafieldsResponse.json();
-      const metafields = metafieldsData.metafields;
-      console.log("ALL METAFIELDS for product", claim.product_id, ":", JSON.stringify(metafields, null, 2));
+      const metafieldsData = await shopifyGet(`products/${claim.product_id}/metafields.json`, shopifyToken);
+      const metafields = metafieldsData.metafields || [];
 
       const getMeta = (key, namespace = "verisart") => {
         const field = metafields.find((m) => m.namespace === namespace && m.key === key);
@@ -213,36 +350,43 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
 
       const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
 
+      // No customer data is written on chain.
       const metadata = {
         name: productData.product.title,
-        description: productData.product.body_html.replace(/<[^>]*>/g, ''),
+        description: (productData.product.body_html || '').replace(/<[^>]*>/g, ''),
         image: ipfsImageUrl,
-attributes: [
-  { trait_type: "Character", value: getMeta("character", "custom") },
-  { trait_type: "Theme", value: getMeta("gimmick", "custom") },
-  { trait_type: "Collection", value: getMeta("collection", "custom") },
-  { trait_type: "Grade", value: getMeta("grade", "custom") },
-  { trait_type: "Volume", value: getMeta("volume", "custom") },
-  { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
-  { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
-  { trait_type: "Friction Force", value: getMeta("friction_force") },
-  { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
-  { trait_type: "Lore", value: getMeta("expanded_lore", "custom") },
-],
+        attributes: [
+          { trait_type: "Character", value: getMeta("character", "custom") },
+          { trait_type: "Theme", value: getMeta("gimmick", "custom") },
+          { trait_type: "Collection", value: getMeta("collection", "custom") },
+          { trait_type: "Grade", value: getMeta("grade", "custom") },
+          { trait_type: "Volume", value: getMeta("volume", "custom") },
+          { trait_type: "Structural Rigidity", value: getMeta("structural_rigidity") },
+          { trait_type: "Innuendo Intensity", value: getMeta("innuendo_intensity") },
+          { trait_type: "Friction Force", value: getMeta("friction_force") },
+          { trait_type: "Tactical Girth", value: getMeta("tactical_girth") },
+          { trait_type: "Lore", value: getMeta("expanded_lore", "custom") },
+        ],
       };
 
-      console.log("METADATA BEING MINTED:", JSON.stringify(metadata, null, 2));
-
       const metadataUri = await uploadMetadataToIPFS(metadata);
-      console.log("METADATA URI:", metadataUri);
 
-      const minted = await nftCollection.mintTo(mintAddress, metadataUri);
-      console.log("NFT minted successfully!", minted);
+      const quantity = claim.quantity || 1;
+      for (let i = 0; i < quantity; i++) {
+        const minted = await nftCollection.mintTo(mintAddress, metadataUri);
+        const tokenId = minted.id.toString();
+        const txHash = (minted.receipt && minted.receipt.transactionHash) || null;
+        console.log(`Minted token ${tokenId} for order ${orderId}, tx ${txHash}`);
+
+        mintedItems.push({
+          name: metadata.name,
+          tokenId,
+          txHash,
+          openseaUrl: `https://opensea.io/assets/matic/${NFT_COLLECTION_ADDRESS}/${tokenId}`,
+        });
+      }
 
       await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [claim.claim_token]);
-
-      const openseaUrl = `https://opensea.io/assets/matic/${NFT_COLLECTION_ADDRESS}/${minted.id.toString()}`;
-      mintedItems.push({ name: metadata.name, openseaUrl });
     }
 
     res.json({ success: true, items: mintedItems, walletAddress: mintAddress });
@@ -253,7 +397,8 @@ attributes: [
   }
 });
 
-// Serve React build and catch-all for client-side routing
+// ---------- static ----------
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
