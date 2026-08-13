@@ -49,6 +49,7 @@ async function initDB() {
   `);
 
   await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1`);
+  await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS alerted BOOLEAN DEFAULT FALSE`);
 
   // Duplicate protection is enforced at write time with an advisory lock in the
   // webhook handler, not with a unique constraint. That avoids deleting the
@@ -535,6 +536,47 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     res.json({ success: false, error: "Something went wrong on our side. Your claim is still valid — please try again in a few minutes, or contact hq@stiffcompetition.shop." });
   }
 });
+
+// ---------- unclaimed order monitoring ----------
+// NFT products auto-fulfil at checkout, so Shopify marks an order delivered the
+// moment it is paid — before the mint happens, and whether or not it ever does.
+// This sweep catches orders that were paid but never claimed, so nobody is left
+// holding a fulfilled order with no NFT.
+
+const UNCLAIMED_ALERT_HOURS = 48;
+
+async function sweepUnclaimedOrders() {
+  try {
+    const result = await pool.query(
+      `SELECT order_id, customer_email, created_at
+       FROM claims
+       WHERE claimed = FALSE
+         AND alerted = FALSE
+         AND created_at < NOW() - INTERVAL '${UNCLAIMED_ALERT_HOURS} hours'`
+    );
+
+    if (result.rows.length === 0) return;
+
+    const lines = result.rows
+      .map((r) => `• Order ${r.order_id} — ${maskEmail(r.customer_email)} — placed ${new Date(r.created_at).toISOString().slice(0, 10)}`)
+      .join('\n');
+
+    await alertFailure(
+      `${result.rows.length} order(s) paid but NFT never claimed`,
+      `${lines}\n\nThese orders show as fulfilled in Shopify but no NFT has been minted. Resend the claim link or contact the buyer.`
+    );
+
+    for (const row of result.rows) {
+      await pool.query("UPDATE claims SET alerted = TRUE WHERE order_id = $1", [row.order_id]);
+    }
+  } catch (e) {
+    console.error("Unclaimed sweep failed:", e.message);
+  }
+}
+
+// Hourly.
+setInterval(sweepUnclaimedOrders, 60 * 60 * 1000);
+setTimeout(sweepUnclaimedOrders, 60 * 1000);
 
 // ---------- static ----------
 
