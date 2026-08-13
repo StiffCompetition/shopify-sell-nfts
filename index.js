@@ -165,6 +165,73 @@ async function alertFailure(title, detail) {
   }
 }
 
+// ---------- fulfilment tracking ----------
+// Shopify's NFT rules expect the blockchain transaction recorded against the
+// order: tx hash as the tracking number, block explorer as the tracking URL,
+// chain as the carrier. NFT products auto-fulfil at checkout, so the fulfilment
+// already exists by the time the mint completes and tracking is added to it.
+
+async function shopifyGraphql(token, query, variables) {
+  const res = await fetchWithRetry(`https://${SHOP_URL}/admin/api/${API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: {
+      "X-Shopify-Access-Token": token,
+      "Content-Type": "application/json",
+      "Accept-Encoding": "identity",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const body = await res.json();
+  if (body.errors) throw new Error(JSON.stringify(body.errors));
+  return body.data;
+}
+
+async function writeTrackingToOrder(token, orderId, txHash) {
+  if (!txHash) return;
+
+  const data = await shopifyGraphql(token, `
+    query($id: ID!) {
+      order(id: $id) {
+        fulfillments(first: 5) { id status }
+      }
+    }
+  `, { id: `gid://shopify/Order/${orderId}` });
+
+  const fulfillments = (data.order && data.order.fulfillments) || [];
+  const target = fulfillments.find((f) => f.status === "SUCCESS");
+
+  if (!target) {
+    console.log(`Order ${orderId}: no fulfilment to attach tracking to yet.`);
+    return;
+  }
+
+  const result = await shopifyGraphql(token, `
+    mutation($fulfillmentId: ID!, $trackingInfoInput: FulfillmentTrackingInput!) {
+      fulfillmentTrackingInfoUpdate(
+        fulfillmentId: $fulfillmentId
+        trackingInfoInput: $trackingInfoInput
+        notifyCustomer: false
+      ) {
+        fulfillment { id trackingInfo { number url company } }
+        userErrors { field message }
+      }
+    }
+  `, {
+    fulfillmentId: target.id,
+    trackingInfoInput: {
+      number: txHash,
+      url: `https://polygonscan.com/tx/${txHash}`,
+      company: "Polygon",
+    },
+  });
+
+  const errors = result.fulfillmentTrackingInfoUpdate.userErrors;
+  if (errors && errors.length) {
+    throw new Error(`Tracking update failed: ${JSON.stringify(errors)}`);
+  }
+  console.log(`Order ${orderId}: tracking written — ${txHash}`);
+}
+
 // ---------- IPFS ----------
 
 async function uploadImageToIPFS(imageUrl) {
@@ -440,6 +507,21 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
       }
 
       await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [claim.claim_token]);
+    }
+
+    // Record the blockchain transaction against the Shopify order. A failure here
+    // must not fail the claim — the customer already has their NFT.
+    const firstTx = mintedItems.find((m) => m.txHash);
+    if (firstTx) {
+      try {
+        await writeTrackingToOrder(shopifyToken, orderId, firstTx.txHash);
+      } catch (e) {
+        console.error("Tracking write failed:", e.message);
+        await alertFailure(
+          "Mint succeeded but tracking not recorded",
+          `Order: ${orderId}\nTx: ${firstTx.txHash}\nError: ${e.message}\n\nCustomer is fine. Compliance record incomplete — needs adding manually.`
+        );
+      }
     }
 
     res.json({ success: true, items: mintedItems, walletAddress: mintAddress });
