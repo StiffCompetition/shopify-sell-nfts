@@ -19,6 +19,8 @@ const {
   PINATA_JWT,
   DATABASE_URL,
   MINTING_ENABLED,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID,
 } = process.env;
 
 const path = require('path');
@@ -48,21 +50,9 @@ async function initDB() {
 
   await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1`);
 
-  // Idempotency. One claim row per product per order, so a repeated webhook
-  // delivery can never create a second claim and mint a duplicate NFT.
-  // Guarded so historic duplicates cannot stop the service booting.
-  try {
-    await pool.query(
-      `ALTER TABLE claims ADD CONSTRAINT claims_order_product_unique UNIQUE (order_id, product_id)`
-    );
-    console.log("Idempotency constraint applied.");
-  } catch (e) {
-    if (e.code === '42710' || e.code === '42P07') {
-      console.log("Idempotency constraint already present.");
-    } else {
-      console.warn("Idempotency constraint NOT applied — clear duplicate rows first:", e.message);
-    }
-  }
+  // Duplicate protection is enforced at write time with an advisory lock in the
+  // webhook handler, not with a unique constraint. That avoids deleting the
+  // historic duplicate rows a constraint would require.
 
   console.log("Database ready!");
 }
@@ -153,6 +143,28 @@ function clearFailures(orderId) {
   attempts.delete(orderId);
 }
 
+// ---------- failure alerting ----------
+// Mint failures are silent to Andy otherwise: the customer sees an error, the
+// order stays unfulfilled, and nothing surfaces until someone emails in.
+
+async function alertFailure(title, detail) {
+  console.error(`ALERT — ${title}: ${detail}`);
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: `🔴 SC MINT ALERT\n\n${title}\n\n${detail}`.slice(0, 4000),
+        disable_web_page_preview: true,
+      }),
+    });
+  } catch (e) {
+    console.error("Telegram alert failed:", e.message);
+  }
+}
+
 // ---------- IPFS ----------
 
 async function uploadImageToIPFS(imageUrl) {
@@ -210,9 +222,11 @@ app.post("/webhooks/orders/create", async (req, res) => {
   // mid-processing is what creates duplicate claims.
   res.sendStatus(200);
 
+  let orderIdForAlert = null;
   try {
     const orderData = JSON.parse(body);
     const orderId = orderData.id.toString();
+    orderIdForAlert = orderId;
     const customerEmail = orderData.email;
     const token = await getShopifyToken();
 
@@ -229,16 +243,55 @@ app.post("/webhooks/orders/create", async (req, res) => {
       }
 
       const claimToken = crypto.randomBytes(32).toString("hex");
-      await pool.query(
-        `INSERT INTO claims (claim_token, order_id, product_id, customer_email, quantity)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (order_id, product_id) DO NOTHING`,
-        [claimToken, orderId, item.product_id.toString(), customerEmail, item.quantity || 1]
-      );
-      console.log(`Order ${orderId}: claim ready for product ${item.product_id} x${item.quantity || 1}`);
+      const productId = item.product_id.toString();
+      const quantity = item.quantity || 1;
+
+      // Duplicate protection without touching existing rows.
+      // A transaction-scoped advisory lock keyed on order+product means two
+      // simultaneous webhook deliveries queue behind each other, so the second
+      // one sees the first one's row and does nothing. Same guarantee a unique
+      // constraint gives, with no constraint and no rows deleted.
+      const lockKey = crypto.createHash('sha256')
+        .update(`${orderId}:${productId}`)
+        .digest()
+        .readBigInt64BE(0)
+        .toString();
+
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+        await db.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
+
+        const existing = await db.query(
+          "SELECT 1 FROM claims WHERE order_id = $1 AND product_id = $2",
+          [orderId, productId]
+        );
+
+        if (existing.rows.length === 0) {
+          await db.query(
+            `INSERT INTO claims (claim_token, order_id, product_id, customer_email, quantity)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [claimToken, orderId, productId, customerEmail, quantity]
+          );
+          console.log(`Order ${orderId}: claim ready for product ${productId} x${quantity}`);
+        } else {
+          console.log(`Order ${orderId}: claim already exists for product ${productId}, skipping`);
+        }
+
+        await db.query('COMMIT');
+      } catch (e) {
+        await db.query('ROLLBACK');
+        throw e;
+      } finally {
+        db.release();
+      }
     }
   } catch (error) {
     console.error("Webhook processing error:", error);
+    await alertFailure(
+      "Webhook failed — no claim created",
+      `Order: ${orderIdForAlert || 'unknown'}\nError: ${error.message}\n\nThe buyer's claim button will not work. See the runbook: Webhook failure.`
+    );
   }
 });
 
@@ -393,7 +446,11 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
 
   } catch (error) {
     console.error("Minting error:", error);
-    res.json({ success: false, error: error.message });
+    await alertFailure(
+      "Mint failed — customer is waiting",
+      `Order: ${orderId}\nWallet: ${req.body && req.body.walletAddress}\nError: ${error.message}\n\nThe claim is still open, so the customer can retry. See the runbook: Mint failure.`
+    );
+    res.json({ success: false, error: "Something went wrong on our side. Your claim is still valid — please try again in a few minutes, or contact hq@stiffcompetition.shop." });
   }
 });
 
