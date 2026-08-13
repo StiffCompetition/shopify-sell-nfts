@@ -21,6 +21,7 @@ const styles = {
   link: { color: '#155724', fontWeight: 'bold' },
   nftLink: { display: 'block', margin: '6px 0', color: '#155724', fontWeight: 'bold' },
   ul: { textAlign: 'left', margin: '15px 0', paddingLeft: 20 },
+  hint: { fontSize: 13, color: '#555', margin: '8px 0' },
   hidden: { display: 'none' },
 };
 
@@ -29,6 +30,8 @@ export default function ClaimPage({ orderId }) {
   const [items, setItems] = useState([]);
   const [walletAddress, setWalletAddress] = useState('');
   const [email, setEmail] = useState('');
+  const [walletEmail, setWalletEmail] = useState('');
+  const [emailHint, setEmailHint] = useState('');
   const [pendingEmail, setPendingEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [message, setMessage] = useState(null); // { text, type }
@@ -49,6 +52,7 @@ export default function ClaimPage({ orderId }) {
         setMessage({ text: data.error, type: 'error' });
       } else {
         setItems(data.items);
+        setEmailHint(data.emailHint || '');
         setStep('choose');
       }
     } catch (e) {
@@ -58,11 +62,16 @@ export default function ClaimPage({ orderId }) {
   }
 
   async function claimWithWallet() {
+    if (!walletEmail.trim()) {
+      setMessage({ text: 'Please enter the email address on your order', type: 'error' });
+      return;
+    }
     if (!walletAddress.trim()) {
       setMessage({ text: 'Please enter your wallet address', type: 'error' });
       return;
     }
-    await submitClaim(walletAddress.trim(), null);
+    setMessage({ text: 'Minting your NFT — this may take up to 2 minutes, please do not close this page...', type: 'info' });
+    await submitClaim(walletAddress.trim(), walletEmail.trim(), null);
   }
 
   async function sendOTP() {
@@ -106,28 +115,29 @@ export default function ClaimPage({ orderId }) {
       });
       const address = account.address;
       setMessage({ text: 'Code verified! Minting your NFT — this may take up to 2 minutes, please do not close this page...', type: 'info' });
-      await submitClaim(address, pendingEmail);
+      await submitClaim(address, pendingEmail, pendingEmail);
     } catch (e) {
       setMessage({ text: 'Invalid code — please check your email and try again', type: 'error' });
       setBusy(false);
     }
   }
 
-  async function submitClaim(address, emailUsed) {
+  // verifyEmail is checked server-side against the address the order was placed with.
+  async function submitClaim(address, verifyEmail, walletCreatedFor) {
     setBusy(true);
     try {
       const res = await fetch(`/claim/order/${orderId}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ walletAddress: address, email: emailUsed }),
+        body: JSON.stringify({ walletAddress: address, email: verifyEmail }),
       });
       const data = await res.json();
       if (data.success) {
         setMintedItems(data.items || []);
-        setUsedEmail(emailUsed);
+        setUsedEmail(walletCreatedFor);
         setStep('success');
       } else {
-        setMessage({ text: 'Something went wrong: ' + data.error, type: 'error' });
+        setMessage({ text: data.error, type: 'error' });
         setBusy(false);
       }
     } catch (e) {
@@ -140,7 +150,12 @@ export default function ClaimPage({ orderId }) {
   const isDisabled = busy;
 
   if (step === 'loading') {
-    return <div style={styles.container}><p>Loading your order...</p></div>;
+    return (
+      <div style={styles.container}>
+        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+        <p>Loading your order...</p>
+      </div>
+    );
   }
 
   if (step === 'error') {
@@ -148,6 +163,9 @@ export default function ClaimPage({ orderId }) {
       <div style={styles.container}>
         <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
         <h1>Invalid or already claimed</h1>
+        <p style={styles.hint}>
+          If you think this is a mistake, contact us at <a href="mailto:hq@stiffcompetition.shop" style={styles.link}>hq@stiffcompetition.shop</a>.
+        </p>
         {message && <div style={styles.error}>{message.text}</div>}
       </div>
     );
@@ -224,6 +242,16 @@ export default function ClaimPage({ orderId }) {
       </ul>
 
       <h3 style={{ marginTop: 20 }}>I have a crypto wallet</h3>
+      <p style={styles.hint}>
+        Confirm the email address on your order{emailHint ? <> (<strong>{emailHint}</strong>)</> : null}, then tell us where to send your NFT.
+      </p>
+      <input
+        style={styles.input}
+        type="email"
+        placeholder="Email address on your order"
+        value={walletEmail}
+        onChange={e => setWalletEmail(e.target.value)}
+      />
       <input
         style={styles.input}
         type="text"
@@ -238,8 +266,9 @@ export default function ClaimPage({ orderId }) {
       <div style={styles.or}>— OR —</div>
 
       <h3>Create a free wallet with my email</h3>
-      <p style={{ fontSize: 13, color: '#555', margin: '8px 0' }}>
+      <p style={styles.hint}>
         No crypto knowledge needed. We'll create a secure digital wallet for you, send your NFT to it, and you can view, trade and manage it using your email address.
+        {emailHint ? <> Please use the address on your order (<strong>{emailHint}</strong>).</> : null}
       </p>
       <input
         style={styles.input}
