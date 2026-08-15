@@ -22,6 +22,7 @@ const styles = {
   nftLink: { display: 'block', margin: '6px 0', color: '#155724', fontWeight: 'bold' },
   ul: { textAlign: 'left', margin: '15px 0', paddingLeft: 20 },
   hint: { fontSize: 13, color: '#555', margin: '8px 0' },
+  bookmark: { marginTop: 16, fontSize: 13, color: '#555', lineHeight: 1.6 },
   hidden: { display: 'none' },
 };
 
@@ -38,6 +39,7 @@ export default function ClaimPage({ orderId }) {
   const [busy, setBusy] = useState(false);
   const [mintedItems, setMintedItems] = useState([]);
   const [usedEmail, setUsedEmail] = useState(null);
+  const [walletAddr, setWalletAddr] = useState(null);
 
   useEffect(() => {
     loadOrder();
@@ -129,12 +131,13 @@ export default function ClaimPage({ orderId }) {
       const res = await fetch(`/claim/order/${orderId}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ walletAddress: address, email: verifyEmail }),
+        body: JSON.stringify({ walletAddress: address, email: verifyEmail, walletCreated: !!walletCreatedFor }),
       });
       const data = await res.json();
       if (data.success) {
         setMintedItems(data.items || []);
         setUsedEmail(walletCreatedFor);
+        setWalletAddr(data.walletAddress || address);
         setStep('success');
       } else {
         setMessage({ text: data.error, type: 'error' });
@@ -198,6 +201,17 @@ export default function ClaimPage({ orderId }) {
             </div>
           )}
         </div>
+        {usedEmail && (
+          <p style={styles.bookmark}>
+            💡 Bookmark your wallet page — sign in anytime with <strong>{usedEmail}</strong>, no password needed.
+            {walletAddr && (
+              <>
+                <br />Your wallet address: <strong style={{ fontSize: 11, wordBreak: 'break-all' }}>{walletAddr}</strong>
+              </>
+            )}
+            <br /><br />We've emailed you the link as well, so you don't need to remember it.
+          </p>
+        )}
       </div>
     );
   }
