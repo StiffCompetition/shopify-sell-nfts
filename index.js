@@ -21,6 +21,7 @@ const {
   MINTING_ENABLED,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
+  RESEND_API_KEY,
 } = process.env;
 
 const path = require('path');
@@ -164,6 +165,66 @@ async function alertFailure(title, detail) {
   } catch (e) {
     console.error("Telegram alert failed:", e.message);
   }
+}
+
+
+// ---------- wallet welcome email ----------
+// Sent once, immediately after a wallet is created during a claim, so the
+// customer has a permanent record of how to get back into it.
+
+async function sendWalletEmail(email, walletAddress, items) {
+  if (!RESEND_API_KEY) {
+    console.log("RESEND_API_KEY not set — wallet email skipped.");
+    return;
+  }
+
+  const walletUrl = `https://my-wallet.stiffcompetition.shop/my-wallet?email=${encodeURIComponent(email)}`;
+  const list = (items || [])
+    .map((i) => `<li style="margin-bottom:6px;">${i.name}</li>`)
+    .join("");
+
+  const html = `
+  <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#111;background:#ffffff;">
+    <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style="max-width:180px;margin-bottom:24px;" />
+    <h1 style="font-size:20px;margin:0 0 12px;">Your wallet is ready</h1>
+    <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">
+      Your Stiff Competition wallet has been created and your artwork is already in it.
+    </p>
+    <ul style="font-size:14px;line-height:1.6;margin:0 0 20px;padding-left:20px;">${list}</ul>
+    <p style="margin:0 0 24px;">
+      <a href="${walletUrl}" style="display:inline-block;padding:12px 22px;background:#000;color:#fff;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">Open My Wallet</a>
+    </p>
+    <p style="font-size:13px;line-height:1.6;color:#555;margin:0 0 16px;">
+      There is no password. Open the link above, enter <strong>${email}</strong>, and we'll send you a code.
+      Bookmark it so you can get back any time.
+    </p>
+    <p style="font-size:12px;line-height:1.6;color:#777;margin:0 0 16px;">
+      Your wallet address:<br /><span style="word-break:break-all;">${walletAddress}</span>
+    </p>
+    <p style="font-size:12px;line-height:1.6;color:#777;margin:24px 0 0;border-top:1px solid #eee;padding-top:16px;">
+      Stiff Competition Ltd, 20 Wenlock Road, London N1 7GU<br />
+      Questions? Reply to this email or contact hq@stiffcompetition.shop
+    </p>
+  </div>`;
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: "Stiff Competition <hq@stiffcompetition.shop>",
+      to: [email],
+      subject: "Your Stiff Competition wallet is ready",
+      html,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Resend responded ${res.status}: ${await res.text()}`);
+  }
+  console.log(`Wallet email sent to ${maskEmail(email)}`);
 }
 
 // ---------- fulfilment tracking ----------
@@ -400,7 +461,7 @@ app.get("/claim/order/:orderId/details", async (req, res) => {
 
 app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
   const { orderId } = req.params;
-  const { walletAddress, email } = req.body;
+  const { walletAddress, email, walletCreated } = req.body;
 
   try {
     if (!mintingEnabled()) {
@@ -521,6 +582,19 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
         await alertFailure(
           "Mint succeeded but tracking not recorded",
           `Order: ${orderId}\nTx: ${firstTx.txHash}\nError: ${e.message}\n\nCustomer is fine. Compliance record incomplete — needs adding manually.`
+        );
+      }
+    }
+
+    // Wallet welcome email — only when we created the wallet for them.
+    if (walletCreated) {
+      try {
+        await sendWalletEmail(supplied, mintAddress, mintedItems);
+      } catch (e) {
+        console.error("Wallet email failed:", e.message);
+        await alertFailure(
+          "Wallet email not sent",
+          `Order: ${orderId}\nEmail: ${supplied}\nError: ${e.message}\n\nCustomer has their NFT but no wallet access email.`
         );
       }
     }
