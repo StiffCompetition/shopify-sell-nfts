@@ -354,10 +354,24 @@ app.post("/webhooks/orders/create", async (req, res) => {
   let orderIdForAlert = null;
   try {
     const orderData = JSON.parse(body);
+    orderIdForAlert = orderData.id.toString();
+    await createClaimsForOrder(orderData);
+  } catch (error) {
+    console.error("Webhook processing error:", error);
+    await alertFailure(
+      "Webhook failed — no claim created",
+      `Order: ${orderIdForAlert || 'unknown'}\nError: ${error.message}\n\nThe buyer's claim button will not work. See the runbook: Webhook failure.`
+    );
+  }
+});
+
+// Creates one claim per NFT line item of an order. Used by the Shopify order webhook and by the gift route below.
+// Duplicate-safe: a second call for the same order and product does nothing.
+async function createClaimsForOrder(orderData) {
     const orderId = orderData.id.toString();
-    orderIdForAlert = orderId;
     const customerEmail = orderData.email;
     const token = await getShopifyToken();
+    let created = 0;
 
     for (const item of orderData.line_items) {
       if (!item.product_id) continue;
@@ -403,6 +417,7 @@ app.post("/webhooks/orders/create", async (req, res) => {
             [claimToken, orderId, productId, customerEmail, quantity]
           );
           console.log(`Order ${orderId}: claim ready for product ${productId} x${quantity}`);
+          created++;
         } else {
           console.log(`Order ${orderId}: claim already exists for product ${productId}, skipping`);
         }
@@ -415,12 +430,38 @@ app.post("/webhooks/orders/create", async (req, res) => {
         db.release();
       }
     }
+    return created;
+}
+
+// ---------- influencer gift (12 Oct 2026) ----------
+// Shopify does not send the order webhook back to this app for orders the same app creates, so the n8n gift flow
+// (SC - NFT Gift) calls this route after it makes the £0 gift order. Only orders tagged influencer-gift are accepted,
+// the caller must send the shared GIFT_SECRET, and the order is read from Shopify, never taken from the request.
+app.post("/claims/gift", express.json(), async (req, res) => {
+  const secret = String(req.get("X-Gift-Secret") || "");
+  const expected = String(process.env.GIFT_SECRET || "");
+  let ok = false;
+  try {
+    const a = Buffer.from(secret, "utf8"), b = Buffer.from(expected, "utf8");
+    ok = expected.length >= 24 && a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch (e) { ok = false; }
+  if (!ok) return res.status(403).json({ success: false, error: "Not allowed" });
+
+  const orderId = String((req.body && req.body.orderId) || "");
+  if (!/^\d+$/.test(orderId)) return res.status(400).json({ success: false, error: "orderId must be the numeric Shopify order ID" });
+  try {
+    const token = await getShopifyToken();
+    const data = await shopifyGet(`orders/${orderId}.json`, token);
+    const order = data && data.order;
+    if (!order) return res.status(404).json({ success: false, error: "Order not found" });
+    const tags = String(order.tags || "").split(",").map(t => t.trim().toLowerCase());
+    if (tags.indexOf("influencer-gift") === -1) return res.status(400).json({ success: false, error: "Not a gift order" });
+    const created = await createClaimsForOrder(order);
+    res.json({ success: true, orderId, created });
   } catch (error) {
-    console.error("Webhook processing error:", error);
-    await alertFailure(
-      "Webhook failed — no claim created",
-      `Order: ${orderIdForAlert || 'unknown'}\nError: ${error.message}\n\nThe buyer's claim button will not work. See the runbook: Webhook failure.`
-    );
+    console.error("Gift claim error:", error);
+    await alertFailure("Gift claim failed", `Order: ${orderId}\nError: ${error.message}`);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
