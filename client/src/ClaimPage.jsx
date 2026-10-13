@@ -26,6 +26,9 @@ const styles = {
   hidden: { display: 'none' },
 };
 
+// Influencer gifts (13 Oct 2026): the gift link carries a private code (?code=...) instead of an order email check.
+const giftCode = (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('code')) || '';
+
 export default function ClaimPage({ orderId }) {
   const [step, setStep] = useState('loading'); // loading, choose, otp, success, error
   const [items, setItems] = useState([]);
@@ -40,6 +43,7 @@ export default function ClaimPage({ orderId }) {
   const [mintedItems, setMintedItems] = useState([]);
   const [usedEmail, setUsedEmail] = useState(null);
   const [walletAddr, setWalletAddr] = useState(null);
+  const [gift, setGift] = useState(null); // { handle } when this is a gift
 
   useEffect(() => {
     loadOrder();
@@ -47,7 +51,7 @@ export default function ClaimPage({ orderId }) {
 
   async function loadOrder() {
     try {
-      const res = await fetch(`/claim/order/${orderId}/details`);
+      const res = await fetch(`/claim/order/${orderId}/details` + (giftCode ? `?code=${encodeURIComponent(giftCode)}` : ''));
       const data = await res.json();
       if (data.error) {
         setStep('error');
@@ -55,6 +59,7 @@ export default function ClaimPage({ orderId }) {
       } else {
         setItems(data.items);
         setEmailHint(data.emailHint || '');
+        if (data.gift) setGift({ handle: data.giftHandle || '' });
         setStep('choose');
       }
     } catch (e) {
@@ -64,7 +69,7 @@ export default function ClaimPage({ orderId }) {
   }
 
   async function claimWithWallet() {
-    if (!walletEmail.trim()) {
+    if (!gift && !walletEmail.trim()) {
       setMessage({ text: 'Please enter the email address on your order', type: 'error' });
       return;
     }
@@ -131,7 +136,7 @@ export default function ClaimPage({ orderId }) {
       const res = await fetch(`/claim/order/${orderId}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ walletAddress: address, email: verifyEmail, walletCreated: !!walletCreatedFor }),
+        body: JSON.stringify({ walletAddress: address, email: verifyEmail, walletCreated: !!walletCreatedFor, code: giftCode }),
       });
       const data = await res.json();
       if (data.success) {
@@ -247,25 +252,42 @@ export default function ClaimPage({ orderId }) {
   return (
     <div style={styles.container}>
       <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
-      <h1>🎉 Claim Your {itemCount}</h1>
-      <p style={{ margin: '10px 0' }}>
-        You've purchased {itemCount} from Stiff Competition! Choose how you'd like to receive {items.length === 1 ? 'it' : 'them'}.
-      </p>
+      {gift ? (
+        <>
+          <h1>🎁 A gift for {gift.handle || 'you'}</h1>
+          <p style={{ margin: '10px 0' }}>
+            Stiff Competition is giving you {itemCount}. Choose how you'd like to receive {items.length === 1 ? 'it' : 'them'}.
+          </p>
+        </>
+      ) : (
+        <>
+          <h1>🎉 Claim Your {itemCount}</h1>
+          <p style={{ margin: '10px 0' }}>
+            You've purchased {itemCount} from Stiff Competition! Choose how you'd like to receive {items.length === 1 ? 'it' : 'them'}.
+          </p>
+        </>
+      )}
       <ul style={styles.ul}>
         {items.map((name, i) => <li key={i}>{name}</li>)}
       </ul>
 
       <h3 style={{ marginTop: 20 }}>I have a crypto wallet</h3>
-      <p style={styles.hint}>
-        Confirm the email address on your order{emailHint ? <> (<strong>{emailHint}</strong>)</> : null}, then tell us where to send your NFT.
-      </p>
-      <input
-        style={styles.input}
-        type="email"
-        placeholder="Email address on your order"
-        value={walletEmail}
-        onChange={e => setWalletEmail(e.target.value)}
-      />
+      {gift ? (
+        <p style={styles.hint}>Tell us where to send your NFT.</p>
+      ) : (
+        <>
+          <p style={styles.hint}>
+            Confirm the email address on your order{emailHint ? <> (<strong>{emailHint}</strong>)</> : null}, then tell us where to send your NFT.
+          </p>
+          <input
+            style={styles.input}
+            type="email"
+            placeholder="Email address on your order"
+            value={walletEmail}
+            onChange={e => setWalletEmail(e.target.value)}
+          />
+        </>
+      )}
       <input
         style={styles.input}
         type="text"
