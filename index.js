@@ -51,6 +51,9 @@ async function initDB() {
 
   await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1`);
   await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS alerted BOOLEAN DEFAULT FALSE`);
+  // Influencer gifts (13 Oct 2026): a gift is claimed with a private code in its link instead of the order email.
+  await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS gift_code TEXT`);
+  await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS gift_handle TEXT`);
 
   // Duplicate protection is enforced at write time with an advisory lock in the
   // webhook handler, not with a unique constraint. That avoids deleting the
@@ -433,7 +436,15 @@ async function createClaimsForOrder(orderData) {
     return created;
 }
 
-// ---------- influencer gift (12 Oct 2026) ----------
+// ---------- influencer gift (12 Oct 2026; private claim link 13 Oct 2026) ----------
+// The gift is claimed from a private link (/claim/order/<id>?code=<gift code>) that Andy sends in the DM, so the
+// influencer gives no email or wallet up front; they choose their own wallet or a new email wallet on the claim page.
+function sameSecret(given, expected) {
+  try {
+    const a = Buffer.from(String(given || ""), "utf8"), b = Buffer.from(String(expected || ""), "utf8");
+    return b.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch (e) { return false; }
+}
 // Shopify does not send the order webhook back to this app for orders the same app creates, so the n8n gift flow
 // (SC - NFT Gift) calls this route after it makes the £0 gift order. Only orders tagged influencer-gift are accepted,
 // the caller must send the shared GIFT_SECRET, and the order is read from Shopify, never taken from the request.
@@ -457,7 +468,15 @@ app.post("/claims/gift", express.json(), async (req, res) => {
     const tags = String(order.tags || "").split(",").map(t => t.trim().toLowerCase());
     if (tags.indexOf("influencer-gift") === -1) return res.status(400).json({ success: false, error: "Not a gift order" });
     const created = await createClaimsForOrder(order);
-    res.json({ success: true, orderId, created });
+    const handle = String((req.body && req.body.handle) || "").slice(0, 80);
+    // One code per gift order; running the gift claim again keeps the code already sent.
+    await pool.query("UPDATE claims SET gift_code = $1, gift_handle = $2 WHERE order_id = $3 AND gift_code IS NULL",
+      [crypto.randomBytes(16).toString("hex"), handle, orderId]);
+    const row = await pool.query("SELECT gift_code, claimed FROM claims WHERE order_id = $1 ORDER BY id LIMIT 1", [orderId]);
+    const code = row.rows[0] && row.rows[0].gift_code;
+    if (!code) return res.status(500).json({ success: false, error: "No claim was set up for this order (no NFT on it?)" });
+    const claimUrl = `https://${req.get("host")}/claim/order/${orderId}?code=${code}`;
+    res.json({ success: true, orderId, created, code, claimUrl, claimed: !!row.rows[0].claimed });
   } catch (error) {
     console.error("Gift claim error:", error);
     await alertFailure("Gift claim failed", `Order: ${orderId}\nError: ${error.message}`);
@@ -482,6 +501,10 @@ app.get("/claim/order/:orderId/details", async (req, res) => {
     if (result.rows.length === 0) {
       return res.json({ error: "Invalid or already claimed" });
     }
+    const giftCode = result.rows[0].gift_code;
+    if (giftCode && !sameSecret(req.query.code, giftCode)) {
+      return res.json({ error: "Invalid or already claimed" });
+    }
 
     const token = await getShopifyToken();
     const itemNames = [];
@@ -492,7 +515,9 @@ app.get("/claim/order/:orderId/details", async (req, res) => {
 
     res.json({
       items: itemNames,
-      emailHint: maskEmail(result.rows[0].customer_email),
+      emailHint: giftCode ? "" : maskEmail(result.rows[0].customer_email),
+      gift: !!giftCode,
+      giftHandle: giftCode ? (result.rows[0].gift_handle || "") : "",
       locked: isLockedOut(orderId),
     });
   } catch (e) {
@@ -502,7 +527,7 @@ app.get("/claim/order/:orderId/details", async (req, res) => {
 
 app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
   const { orderId } = req.params;
-  const { walletAddress, email, walletCreated } = req.body;
+  const { walletAddress, email, walletCreated, code } = req.body;
 
   try {
     if (!mintingEnabled()) {
@@ -526,7 +551,14 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     // order ID mints to whatever wallet the caller supplies.
     const supplied = normaliseEmail(email);
     const onOrder = normaliseEmail(result.rows[0].customer_email);
-    if (!supplied || supplied !== onOrder) {
+    const giftCode = result.rows[0].gift_code;
+    if (giftCode) {
+      // Gift: the private code in the link is the proof; the email (if any) is only the one they made a wallet with.
+      if (!sameSecret(code, giftCode)) {
+        recordFailure(orderId);
+        return res.json({ success: false, error: "This gift link is not valid. Please use the link you were sent." });
+      }
+    } else if (!supplied || supplied !== onOrder) {
       recordFailure(orderId);
       return res.json({
         success: false,
@@ -628,7 +660,7 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     }
 
     // Wallet welcome email — only when we created the wallet for them.
-    if (walletCreated) {
+    if (walletCreated && supplied) {
       try {
         await sendWalletEmail(supplied, mintAddress, mintedItems);
       } catch (e) {
@@ -667,6 +699,7 @@ async function sweepUnclaimedOrders() {
        FROM claims
        WHERE claimed = FALSE
          AND alerted = FALSE
+         AND gift_code IS NULL
          AND created_at < NOW() - INTERVAL '${UNCLAIMED_ALERT_HOURS} hours'`
     );
 
