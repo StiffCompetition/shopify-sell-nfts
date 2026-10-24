@@ -54,6 +54,8 @@ async function initDB() {
   // Influencer gifts (13 Oct 2026): a gift is claimed with a private code in its link instead of the order email.
   await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS gift_code TEXT`);
   await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS gift_handle TEXT`);
+  await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS token_ids TEXT`);
+  await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS wallet_address TEXT`);
 
   // Duplicate protection is enforced at write time with an advisory lock in the
   // webhook handler, not with a unique constraint. That avoids deleting the
@@ -642,6 +644,23 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
       }
 
       await pool.query("UPDATE claims SET claimed = TRUE WHERE claim_token = $1", [claim.claim_token]);
+
+      // Record which tokens this claim produced and which wallet received them, so
+      // later steps (for example the NFT shirt order) can find them. A failure here
+      // must not fail the claim — the customer already has their NFT.
+      try {
+        const claimTokenIds = mintedItems.slice(-quantity).map((m) => m.tokenId).join(",");
+        await pool.query(
+          "UPDATE claims SET token_ids = $1, wallet_address = $2 WHERE claim_token = $3",
+          [claimTokenIds, mintAddress, claim.claim_token]
+        );
+      } catch (e) {
+        console.error("Token record failed:", e.message);
+        await alertFailure(
+          "Mint succeeded but token numbers not saved",
+          `Order: ${orderId}\nError: ${e.message}\n\nCustomer is fine. The token numbers are in the mint log.`
+        );
+      }
     }
 
     // Record the blockchain transaction against the Shopify order. A failure here
@@ -655,6 +674,29 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
         await alertFailure(
           "Mint succeeded but tracking not recorded",
           `Order: ${orderId}\nTx: ${firstTx.txHash}\nError: ${e.message}\n\nCustomer is fine. Compliance record incomplete — needs adding manually.`
+        );
+      }
+    }
+
+    // Tell n8n the order has minted so any NFT shirt on the order can be made.
+    // Does nothing until SHIRT_HOOK_URL is set. A failure must not fail the claim.
+    if (process.env.SHIRT_HOOK_URL && mintedItems.length > 0) {
+      try {
+        const hookRes = await fetch(process.env.SHIRT_HOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Shirt-Secret": process.env.SHIRT_HOOK_SECRET || "" },
+          body: JSON.stringify({
+            orderId,
+            walletAddress: mintAddress,
+            tokens: mintedItems.map((m) => ({ tokenId: m.tokenId, name: m.name })),
+          }),
+        });
+        if (!hookRes.ok) throw new Error(`n8n answered ${hookRes.status}`);
+      } catch (e) {
+        console.error("Shirt hook failed:", e.message);
+        await alertFailure(
+          "Mint succeeded but shirt hand-off failed",
+          `Order: ${orderId}\nError: ${e.message}\n\nCustomer is fine. If the order has an NFT shirt it has not been started.`
         );
       }
     }
