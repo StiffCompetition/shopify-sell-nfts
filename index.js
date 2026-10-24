@@ -361,6 +361,7 @@ app.post("/webhooks/orders/create", async (req, res) => {
     const orderData = JSON.parse(body);
     orderIdForAlert = orderData.id.toString();
     await createClaimsForOrder(orderData);
+    await notifyShirtOnlyOrder(orderData);
   } catch (error) {
     console.error("Webhook processing error:", error);
     await alertFailure(
@@ -369,6 +370,24 @@ app.post("/webhooks/orders/create", async (req, res) => {
     );
   }
 });
+
+// A shirt bought on its own (certificate page or Vault) carries a _shirt_token line property. Tell n8n which order to read.
+// Does nothing until SHIRT_HOOK_URL is set. A failure here must never affect claims.
+async function notifyShirtOnlyOrder(orderData) {
+  try {
+    if (!process.env.SHIRT_HOOK_URL) return;
+    const has = (orderData.line_items || []).some(li => (li.properties || []).some(p => p && p.name === "_shirt_token"));
+    if (!has) return;
+    const r = await fetch(process.env.SHIRT_HOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: String(orderData.id) })
+    });
+    console.log(`Order ${orderData.id}: shirt-only hand-off sent (${r.status})`);
+  } catch (e) {
+    console.error("Shirt-only hand-off failed (claims unaffected):", e.message);
+  }
+}
 
 // Creates one claim per NFT line item of an order. Used by the Shopify order webhook and by the gift route below.
 // Duplicate-safe: a second call for the same order and product does nothing.
