@@ -199,3 +199,57 @@ def dog_tag(name, title, token_id):
     x = X0 + BLOCK - t.width - cm(1.2); y = cm(7.0)
     _chain(im, x + hc[0], y + hc[1]); im.paste(t, (x, y), t)
     return im
+
+
+# ---------------------------------------------------------------- NFT poster (3:4, Gelato 450 x 600 mm)
+PW, PH = 5400, 7200
+P_YEL = (254, 242, 0); P_OFF = (245, 245, 240); P_INK = (20, 20, 20)
+
+
+def poster_colour(nft):
+    """Yellow like the museum posters; off-white when the artwork's own edge is yellow, lime or green (Andy, 22 Oct 2026)."""
+    import colorsys
+    im = nft.convert("RGB").resize((128, 128), I.LANCZOS); px = im.load(); hs = []
+    for i in range(128):
+        for x, y in ((i, 0), (i, 127), (0, i), (127, i)):
+            r, g, b = px[x, y]; h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            if s > 0.35 and v > 0.35: hs.append(h * 360)
+    share = len([h for h in hs if 50 <= h <= 150]) / 512.0
+    return P_OFF if share > 0.4 else P_YEL
+
+
+def _text(text, size, tr, fill):
+    return render(text, size, tr, fill)
+
+
+def _fit(text, cap_px, max_w, tr, fill):
+    """Letters set at the wanted capital height; shrunk only when the line would be wider than max_w."""
+    s = cap_px / 0.68
+    im = _text(text, s, tr, fill)
+    if im.width > max_w:
+        s = s * max_w / im.width; im = _text(text, s, tr, fill)
+    return im
+
+
+def poster(nft, character, number_line, first_name):
+    """character: 'MAJOR WOOD' or 'MAJOR WOOD AND SLICK WILLY'; number_line: 'TRAVEL #0022'; first_name: 'Joey'."""
+    bg = poster_colour(nft)
+    im = I.new("RGB", (PW, PH), bg); d = ImageDraw.Draw(im)
+    side = 4656; x0 = (PW - side) // 2; y0 = 330; bd = 30
+    d.rectangle((x0, y0, x0 + side - 1, y0 + side - 1), fill=P_INK)
+    art = nft.convert("RGB").resize((side - 2 * bd, side - 2 * bd), I.LANCZOS)
+    im.paste(art, (x0 + bd, y0 + bd))
+    cx = PW // 2; y = y0 + side + 190
+    n1 = _fit(character.upper(), 150, side - 700, 0.14, P_INK + (255,))
+    im.paste(n1, (cx - n1.width // 2, y), n1); y += n1.height + 60
+    n2 = _fit(number_line.upper(), 66, side - 1200, 0.12, P_INK + (255,))
+    im.paste(n2, (cx - n2.width // 2, y), n2); y += n2.height + 130
+    lg = LOGO.copy(); a = lg.getchannel("A")
+    lg = I.merge("RGBA", (I.new("L", lg.size, P_INK[0]),) * 3 + (a,))
+    lw = side; lh = int(lg.height * lw / lg.width)
+    lg = lg.resize((lw, lh), I.LANCZOS)
+    im.paste(lg, (cx - lw // 2, y), lg); y += lh + 150
+    line = "%s owns this original digital artwork on the blockchain" % first_name
+    n3 = _fit(line, 62, side - 900, 0.04, P_INK + (255,))
+    im.paste(n3, (cx - n3.width // 2, y), n3)
+    return im

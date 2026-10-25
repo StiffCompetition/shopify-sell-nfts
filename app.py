@@ -11,7 +11,7 @@ SECRET = os.environ.get("SHIRT_MAKER_SECRET", "")
 BASE = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 DIR = "/tmp/prints"; os.makedirs(DIR, exist_ok=True)
 TTL = 7200
-THEMES = ("registered_owner", "brag_stats", "dog_tag")
+THEMES = ("registered_owner", "brag_stats", "dog_tag", "poster")
 
 
 def clean():
@@ -40,7 +40,9 @@ def do_render():
         theme = j["theme"]; name = str(j["name"]).strip().upper()
         if theme not in THEMES or not name or len(name) > 24: raise ValueError("bad theme or name")
         nft = fetch(j["image_url"])
-        if theme == "registered_owner":
+        if theme == "poster":
+            im = R.poster(nft, str(j["character"]), str(j["title"]), name.capitalize())
+        elif theme == "registered_owner":
             im = R.registered_owner(nft, j["title"].upper(), name, j["character"])
         elif theme == "brag_stats":
             st = [(str(a).upper(), int(b)) for a, b in j["stats"]]
