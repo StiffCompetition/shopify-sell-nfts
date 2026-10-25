@@ -371,12 +371,12 @@ app.post("/webhooks/orders/create", async (req, res) => {
   }
 });
 
-// A shirt bought on its own (certificate page or Vault) carries a _shirt_token line property. Tell n8n which order to read.
+// A shirt or poster bought on its own (certificate page or Vault) carries a _shirt_token or _poster_token line property. Tell n8n which order to read.
 // Does nothing until SHIRT_HOOK_URL is set. A failure here must never affect claims.
 async function notifyShirtOnlyOrder(orderData) {
   try {
     if (!process.env.SHIRT_HOOK_URL) return;
-    const has = (orderData.line_items || []).some(li => (li.properties || []).some(p => p && p.name === "_shirt_token"));
+    const has = (orderData.line_items || []).some(li => (li.properties || []).some(p => p && (p.name === "_shirt_token" || p.name === "_poster_token")));
     if (!has) return;
     const r = await fetch(process.env.SHIRT_HOOK_URL, {
       method: "POST",
