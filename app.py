@@ -1,5 +1,7 @@
 """Shirt print-file maker: separate small service. Makes one print file per order.
 POST /render  (header X-Shirt-Secret)  -> {"url": ".../files/<id>.png"}; files expire after 2 hours.
+Optional "width" (200 to 1600): a small transparent preview of the same print for the shop's live pictures (26 Oct 2026).
+Files are served with Access-Control-Allow-Origin: * so the shop page can draw them on the garment photo.
 """
 import io, os, time, uuid, threading, hmac, urllib.request
 from flask import Flask, request, jsonify, send_file, abort
@@ -52,6 +54,11 @@ def do_render():
             im = R.dog_tag(name, j["title"].upper(), j["token_id"])
     except Exception as e:
         return jsonify(error=str(e)), 400
+    w = j.get("width")
+    if w:
+        try: w = max(200, min(1600, int(w)))
+        except Exception: return jsonify(error="bad width"), 400
+        im = im.resize((w, round(im.height * w / im.width)), I.LANCZOS)
     clean(); fid = uuid.uuid4().hex
     im.save(os.path.join(DIR, fid + ".png"), dpi=(300, 300))
     return jsonify(url="%s/files/%s.png" % (BASE or request.host_url.rstrip("/"), fid))
@@ -62,7 +69,9 @@ def files(fid):
     if not fid.isalnum(): abort(404)
     p = os.path.join(DIR, fid + ".png")
     if not os.path.exists(p): abort(404)
-    return send_file(p, mimetype="image/png")
+    resp = send_file(p, mimetype="image/png")
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 
 if __name__ == "__main__":
