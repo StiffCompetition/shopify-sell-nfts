@@ -146,7 +146,7 @@ export default function ClaimPage({ orderId }) {
   if (step === 'error') {
     return (
       <div style={styles.container}>
-        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+        <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
         <h1>Invalid or already claimed</h1>
         {message && <div style={styles.error}>{message.text}</div>}
       </div>
@@ -156,7 +156,7 @@ export default function ClaimPage({ orderId }) {
   if (step === 'success') {
     return (
       <div style={styles.container}>
-        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+        <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
         <div style={styles.success}>
           <p>🎉 Your {mintedItems.length > 1 ? 'NFTs have' : 'NFT has'} been minted and sent to your wallet!</p>
           {usedEmail && (
@@ -185,7 +185,7 @@ export default function ClaimPage({ orderId }) {
   if (step === 'otp') {
     return (
       <div style={styles.container}>
-        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+        <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
         <h1>Check your email</h1>
         <p style={{ margin: '10px 0', color: '#555' }}>
           We sent a 6-digit verification code to <strong>{pendingEmail}</strong>. Please check your inbox (and spam folder). The code expires in 10 minutes.
@@ -212,7 +212,7 @@ export default function ClaimPage({ orderId }) {
   // step === 'choose'
   return (
     <div style={styles.container}>
-      <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+      <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
       <h1>🎉 Claim Your {itemCount}</h1>
       <p style={{ margin: '10px 0' }}>
         You've purchased {itemCount} from Stiff Competition! Choose how you'd like to receive {items.length === 1 ? 'it' : 'them'}.

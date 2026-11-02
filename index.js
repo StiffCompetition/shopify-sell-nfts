@@ -190,7 +190,7 @@ async function sendWalletEmail(email, walletAddress, items) {
 
   const html = `
   <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#111;background:#ffffff;">
-    <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style="max-width:180px;margin-bottom:24px;" />
+    <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style="max-width:180px;margin-bottom:24px;" />
     <h1 style="font-size:20px;margin:0 0 12px;">Your wallet is ready</h1>
     <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">
       Your Stiff Competition wallet has been created and your artwork is already in it.

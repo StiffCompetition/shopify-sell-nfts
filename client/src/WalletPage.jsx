@@ -58,7 +58,7 @@ function WalletContent() {
   return (
     <div style={styles.container}>
       <img
-        src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg"
+        src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg"
         alt="Stiff Competition"
         style={{ maxWidth: 200, marginBottom: 20 }}
       />
@@ -86,7 +86,7 @@ function WalletContent() {
           supportedNFTs={supportedNFTs}
           appMetadata={{
             name: 'Stiff Competition',
-            logoUrl: 'https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg',
+            logoUrl: 'https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg',
           }}
         />
       </div>

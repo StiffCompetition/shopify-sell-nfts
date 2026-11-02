@@ -79,7 +79,7 @@ export default function WalletPage() {
   if (step === 'connected') {
     return (
       <div style={styles.container}>
-        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+        <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
         <h1>✅ Wallet Connected</h1>
         <p style={{ margin: '15px 0', color: '#555' }}>You're signed in as <strong>{email}</strong>.</p>
         <div style={styles.walletBox}>
@@ -100,7 +100,7 @@ export default function WalletPage() {
   if (step === 'otp') {
     return (
       <div style={styles.container}>
-        <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+        <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
         <h1>Check your email</h1>
         {message && <div style={styles[message.type]}>{message.text}</div>}
         <input
@@ -123,7 +123,7 @@ export default function WalletPage() {
 
   return (
     <div style={styles.container}>
-      <img src="https://res.cloudinary.com/dkapdtxek/image/upload/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
+      <img src="https://raw.githubusercontent.com/StiffCompetition/sc-assets/19c25feea3be8efec786340fae4ca5542983b820/brand/logos/SC_small.svg" alt="Stiff Competition" style={{ maxWidth: 200, marginBottom: 20 }} />
       <h1>Access Your Wallet</h1>
       <p style={{ margin: '15px 0', color: '#555' }}>Sign in with your email to access your Stiff Competition wallet and NFTs.</p>
       <input
