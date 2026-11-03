@@ -26,7 +26,7 @@ module.exports = function mountOpenSeaList(app, express) {
     const price = Number(b.price);
     if (!(price > 0) || price > 1000000) return res.status(400).json({ success: false, error: "price must be above 0" });
     const mins = Number(b.expirationMinutes) > 0 ? Math.min(Math.max(Math.floor(Number(b.expirationMinutes)), 10), 1440) : 0;
-    const currency = String(b.currency || "POL").toUpperCase() === "WETH" ? "WETH" : "POL";
+    const currency = "WETH"; // OpenSea lists Polygon pieces in WETH only (native POL and WPOL are rejected)
     const days = Math.min(Math.max(Number(b.expirationDays) || 30, 1), 180);
     try {
       const { ethers } = require("ethers6");
@@ -62,16 +62,7 @@ module.exports = function mountOpenSeaList(app, express) {
       }
       if (apiKey.length < 16) return res.status(500).json({ success: false, error: "No OpenSea API key available" });
       const sdk = new OpenSeaSDK(wallet, { chain: Chain.Polygon, apiKey });
-      // Price currency: POL (Polygon's native token, default) or WETH. The SDK takes the listing currency from the
-      // collection data it fetches, and otherwise lists in WETH, so for POL we hand it WPOL, the wrapped POL token (OpenSea refuses the native zero address on Polygon).
-      if (currency === "POL") {
-        const origGetCollection = sdk.api.getCollection.bind(sdk.api);
-        sdk.api.getCollection = async (slug) => {
-          const c = await origGetCollection(slug);
-          const pc = c.pricingCurrencies || {};
-          return { ...c, pricingCurrencies: { ...pc, listingCurrency: { ...(pc.listingCurrency || {}), address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" } } }; // WPOL (wrapped POL); OpenSea rejects the native zero address on Polygon
-        };
-      }
+      // Price is in WETH: OpenSea rejects native POL and wrapped POL for Polygon listings.
       const expirationTime = Math.floor(Date.now() / 1000) + (mins ? mins * 60 : days * 86400);
       const result = await sdk.createBulkListings({
         accountAddress: wallet.address,
