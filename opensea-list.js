@@ -25,6 +25,7 @@ module.exports = function mountOpenSeaList(app, express) {
     }
     const price = Number(b.price);
     if (!(price > 0) || price > 1000000) return res.status(400).json({ success: false, error: "price must be above 0" });
+    const mins = Number(b.expirationMinutes) > 0 ? Math.min(Math.max(Math.floor(Number(b.expirationMinutes)), 10), 1440) : 0;
     const days = Math.min(Math.max(Number(b.expirationDays) || 30, 1), 180);
     try {
       const { ethers } = require("ethers6");
@@ -52,7 +53,7 @@ module.exports = function mountOpenSeaList(app, express) {
       }
       if (apiKey.length < 16) return res.status(500).json({ success: false, error: "No OpenSea API key available" });
       const sdk = new OpenSeaSDK(wallet, { chain: Chain.Polygon, apiKey });
-      const expirationTime = Math.floor(Date.now() / 1000) + days * 86400;
+      const expirationTime = Math.floor(Date.now() / 1000) + (mins ? mins * 60 : days * 86400);
       const result = await sdk.createBulkListings({
         accountAddress: wallet.address,
         continueOnError: true,
@@ -60,7 +61,7 @@ module.exports = function mountOpenSeaList(app, express) {
       });
       const listed = (result.successful || []).map(o => ({ orderHash: o.orderHash, status: o.status }));
       const failed = (result.failed || []).map(f => ({ error: String((f && (f.error && f.error.message || f.message)) || f).slice(0, 300) }));
-      res.json({ success: failed.length === 0, listed, failed, wallet: wallet.address, price, expirationDays: days, keyKind });
+      res.json({ success: failed.length === 0, listed, failed, wallet: wallet.address, price, expirationDays: days, expirationMinutes: mins || undefined, keyKind });
     } catch (e) {
       res.status(500).json({ success: false, error: String(e && e.message || e).slice(0, 400) });
     }
