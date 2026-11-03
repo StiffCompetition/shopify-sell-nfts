@@ -156,19 +156,22 @@ function clearFailures(orderId) {
 
 async function alertFailure(title, detail) {
   console.error(`ALERT — ${title}: ${detail}`);
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  // 3 Nov 2026 (Andy): no Telegram. Alerts go to the dashboard Alerts tab through the n8n SC - Alert webhook.
   try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    await fetch("https://n8n-production-afc2.up.railway.app/webhook/sc-alert", {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: `🔴 SC MINT ALERT\n\n${title}\n\n${detail}`.slice(0, 4000),
-        disable_web_page_preview: true,
+        key: "mint:" + String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60),
+        title: "NFT mint service: " + title,
+        cause: String(detail).slice(0, 1500),
+        next_step: "Claude checks the Railway logs for shopify-sell-nfts and fixes it",
+        link: "https://railway.com/project/a76fbaa0-e4f4-470d-a75e-2b98d92e8f48",
+        red: false,
       }),
     });
   } catch (e) {
-    console.error("Telegram alert failed:", e.message);
+    console.error("Dashboard alert failed:", e.message);
   }
 }
 
