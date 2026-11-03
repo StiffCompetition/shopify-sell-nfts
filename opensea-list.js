@@ -63,13 +63,13 @@ module.exports = function mountOpenSeaList(app, express) {
       if (apiKey.length < 16) return res.status(500).json({ success: false, error: "No OpenSea API key available" });
       const sdk = new OpenSeaSDK(wallet, { chain: Chain.Polygon, apiKey });
       // Price currency: POL (Polygon's native token, default) or WETH. The SDK takes the listing currency from the
-      // collection data it fetches, and otherwise lists in WETH, so for POL we hand it the native token (zero address).
+      // collection data it fetches, and otherwise lists in WETH, so for POL we hand it WPOL, the wrapped POL token (OpenSea refuses the native zero address on Polygon).
       if (currency === "POL") {
         const origGetCollection = sdk.api.getCollection.bind(sdk.api);
         sdk.api.getCollection = async (slug) => {
           const c = await origGetCollection(slug);
           const pc = c.pricingCurrencies || {};
-          return { ...c, pricingCurrencies: { ...pc, listingCurrency: { ...(pc.listingCurrency || {}), address: "0x0000000000000000000000000000000000000000" } } };
+          return { ...c, pricingCurrencies: { ...pc, listingCurrency: { ...(pc.listingCurrency || {}), address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" } } }; // WPOL (wrapped POL); OpenSea rejects the native zero address on Polygon
         };
       }
       const expirationTime = Math.floor(Date.now() / 1000) + (mins ? mins * 60 : days * 86400);
