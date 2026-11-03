@@ -1,6 +1,7 @@
 // OpenSea listing signer (added 3 Nov 2026 for the OpenSea drops, SC - OpenSea Drop List in n8n).
 // POST /opensea/list, header X-Sign-Secret = OPENSEA_SIGN_SECRET (new, separate from every other secret).
-// Body: { apiKey, tokenIds: ["38", ...], price: 1.5, expirationDays?: 30, dryRun?: true }
+// Body: { tokenIds: ["38", ...], price: 1.5, expirationDays?: 30, dryRun?: true }
+// OpenSea API key: Railway variable OPENSEA_API_KEY (full key) if set; otherwise a free instant key is requested from OpenSea.
 // Lists tokens of THIS collection only (NFT_COLLECTION_ADDRESS), owned by the admin wallet, with one
 // Seaport signature for the whole batch (OpenSea SDK createBulkListings). The admin key never leaves this service.
 // Nothing here touches the shop, the claim flow or minting. If this module fails to load, only this route fails.
@@ -24,12 +25,10 @@ module.exports = function mountOpenSeaList(app, express) {
     }
     const price = Number(b.price);
     if (!(price > 0) || price > 1000000) return res.status(400).json({ success: false, error: "price must be above 0" });
-    const apiKey = String(b.apiKey || "");
-    if (apiKey.length < 16) return res.status(400).json({ success: false, error: "apiKey missing" });
     const days = Math.min(Math.max(Number(b.expirationDays) || 30, 1), 180);
     try {
       const { ethers } = require("ethers6");
-      const { OpenSeaSDK, Chain } = require("@opensea/sdk");
+      const { OpenSeaSDK, OpenSeaAPI, Chain } = require("@opensea/sdk");
       const collection = String(process.env.NFT_COLLECTION_ADDRESS || "");
       if (!/^0x[0-9a-fA-F]{40}$/.test(collection)) return res.status(500).json({ success: false, error: "Collection address not set" });
       const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || "https://polygon-rpc.com", 137, { staticNetwork: true });
@@ -44,6 +43,14 @@ module.exports = function mountOpenSeaList(app, express) {
       if (notOwned.length) return res.status(400).json({ success: false, error: "Not owned by the admin wallet: " + notOwned.join(", "), wallet: wallet.address, polBalance: balance });
       if (b.dryRun !== false) return res.json({ success: true, dryRun: true, wallet: wallet.address, polBalance: balance, wouldList: ids.length, price, expirationDays: days });
 
+      let apiKey = String(process.env.OPENSEA_API_KEY || "");
+      let keyKind = "full key";
+      if (apiKey.length < 16) {
+        const k = await OpenSeaAPI.requestInstantApiKey();
+        apiKey = String(k && k.apiKey || "");
+        keyKind = "free instant key";
+      }
+      if (apiKey.length < 16) return res.status(500).json({ success: false, error: "No OpenSea API key available" });
       const sdk = new OpenSeaSDK(wallet, { chain: Chain.Polygon, apiKey });
       const expirationTime = Math.floor(Date.now() / 1000) + days * 86400;
       const result = await sdk.createBulkListings({
@@ -53,7 +60,7 @@ module.exports = function mountOpenSeaList(app, express) {
       });
       const listed = (result.successful || []).map(o => ({ orderHash: o.orderHash, status: o.status }));
       const failed = (result.failed || []).map(f => ({ error: String((f && (f.error && f.error.message || f.message)) || f).slice(0, 300) }));
-      res.json({ success: failed.length === 0, listed, failed, wallet: wallet.address, price, expirationDays: days });
+      res.json({ success: failed.length === 0, listed, failed, wallet: wallet.address, price, expirationDays: days, keyKind });
     } catch (e) {
       res.status(500).json({ success: false, error: String(e && e.message || e).slice(0, 400) });
     }
