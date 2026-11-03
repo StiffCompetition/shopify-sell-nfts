@@ -32,7 +32,15 @@ module.exports = function mountOpenSeaList(app, express) {
       const { OpenSeaSDK, OpenSeaAPI, Chain } = require("@opensea/sdk");
       const collection = String(process.env.NFT_COLLECTION_ADDRESS || "");
       if (!/^0x[0-9a-fA-F]{40}$/.test(collection)) return res.status(500).json({ success: false, error: "Collection address not set" });
-      const provider = new ethers.JsonRpcProvider(process.env.POLYGON_RPC_URL || "https://polygon-bor-rpc.publicnode.com", 137, { staticNetwork: true });
+      let rpcReq;
+      if (process.env.THIRDWEB_SECRET_KEY && !process.env.POLYGON_RPC_URL) {
+        // thirdweb RPC, authenticated with the service's existing thirdweb secret (supports archive-style calls the OpenSea SDK makes)
+        rpcReq = new ethers.FetchRequest("https://137.rpc.thirdweb.com");
+        rpcReq.setHeader("x-secret-key", process.env.THIRDWEB_SECRET_KEY);
+      } else {
+        rpcReq = process.env.POLYGON_RPC_URL || "https://polygon.drpc.org";
+      }
+      const provider = new ethers.JsonRpcProvider(rpcReq, 137, { staticNetwork: true });
       const wallet = new ethers.Wallet(process.env.ADMIN_PRIVATE_KEY, provider);
       const nft = new ethers.Contract(collection, ["function ownerOf(uint256) view returns (address)"], provider);
       const notOwned = [];
