@@ -799,5 +799,7 @@ app.get('*', (req, res) => {
 
 // OpenSea listing signer (3 Nov 2026). Isolated: if it cannot load, only /opensea/list is missing; the shop, claims and minting are untouched.
 try { require("./opensea-list")(app, express); } catch (e) { console.error("opensea-list not loaded:", e && e.message); }
+// OpenSea collection page banner uploader (4 Nov 2026). Isolated the same way: if it cannot load, only /opensea/collection-hero is missing.
+try { require("./opensea-collection-media")(app, express); } catch (e) { console.error("opensea-collection-media not loaded:", e && e.message); }
 
 app.listen(3000, () => console.log("Server running on port 3000!"));
