@@ -627,7 +627,9 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
         return field ? field.value : "";
       };
 
-      const ipfsImageUrl = await uploadImageToIPFS(cloudinaryImageUrl);
+      // PIN_IMAGES=false (Railway, 4 Nov 2026, Andy: no paid Pinata plan): the picture stays on the shop's own CDN link and only the
+      // details file is pinned, one pin per piece, so a 339-piece release fits the free plan. Unset or true = pin the picture as before.
+      const ipfsImageUrl = String(process.env.PIN_IMAGES || "true") === "false" ? cloudinaryImageUrl : await uploadImageToIPFS(cloudinaryImageUrl);
 
       // No customer data is written on chain.
       const metadata = {
