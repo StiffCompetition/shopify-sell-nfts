@@ -2,7 +2,7 @@
 // POST /opensea/list, header X-Sign-Secret = OPENSEA_SIGN_SECRET (new, separate from every other secret).
 // Body: { tokenIds: ["38", ...], price: 1.5, expirationDays?: 30, dryRun?: true }
 // OpenSea API key: Railway variable OPENSEA_API_KEY (full key) if set; otherwise a free instant key is requested from OpenSea.
-// Lists tokens of THIS collection only (NFT_COLLECTION_ADDRESS), owned by the admin wallet, with one
+// Lists tokens of THIS collection only (DROP_COLLECTION_ADDRESS when set, else NFT_COLLECTION_ADDRESS), owned by the admin wallet, with one
 // Seaport signature for the whole batch (OpenSea SDK createBulkListings). The admin key never leaves this service.
 // Nothing here touches the shop, the claim flow or minting. If this module fails to load, only this route fails.
 const crypto = require("crypto");
@@ -31,7 +31,7 @@ module.exports = function mountOpenSeaList(app, express) {
     try {
       const { ethers } = require("ethers6");
       const { OpenSeaSDK, OpenSeaAPI, Chain } = require("@opensea/sdk");
-      const collection = String(process.env.NFT_COLLECTION_ADDRESS || "");
+      const collection = String(process.env.DROP_COLLECTION_ADDRESS || process.env.NFT_COLLECTION_ADDRESS || ""); // drop pieces live in DROP_COLLECTION_ADDRESS when set (6 Nov 2026)
       if (!/^0x[0-9a-fA-F]{40}$/.test(collection)) return res.status(500).json({ success: false, error: "Collection address not set" });
       let rpcReq;
       if (process.env.THIRDWEB_SECRET_KEY && !process.env.POLYGON_RPC_URL) {

@@ -601,7 +601,12 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
     const sdk = ThirdwebSDK.fromPrivateKey(ADMIN_PRIVATE_KEY, "polygon", {
       secretKey: THIRDWEB_SECRET_KEY,
     });
-    const nftCollection = await sdk.getNFTCollection(NFT_COLLECTION_ADDRESS);
+    // Blueprint drop pieces (gift claims with handle @opensea-...) mint into DROP_COLLECTION_ADDRESS when it is set (6 Nov 2026, Andy: the Blueprint
+    // is its own new collection). Every other claim, including existing buyers', keeps minting into NFT_COLLECTION_ADDRESS.
+    const dropHandle = String(result.rows[0].gift_handle || "").toLowerCase();
+    const dropAddress = String(process.env.DROP_COLLECTION_ADDRESS || "");
+    const collectionAddress = (dropHandle.indexOf("@opensea-") === 0 && /^0x[0-9a-fA-F]{40}$/.test(dropAddress)) ? dropAddress : NFT_COLLECTION_ADDRESS;
+    const nftCollection = await sdk.getNFTCollection(collectionAddress);
 
     const mintedItems = [];
 
@@ -663,7 +668,7 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
           name: metadata.name,
           tokenId,
           txHash,
-          openseaUrl: `https://opensea.io/assets/matic/${NFT_COLLECTION_ADDRESS}/${tokenId}`,
+          openseaUrl: `https://opensea.io/assets/matic/${collectionAddress}/${tokenId}`,
         });
       }
 
@@ -806,5 +811,6 @@ try { require("./opensea-list")(app, express); } catch (e) { console.error("open
 // OpenSea collection page banner uploader (4 Nov 2026). Isolated the same way: if it cannot load, only /opensea/collection-hero is missing.
 try { require("./opensea-collection-media")(app, express); } catch (e) { console.error("opensea-collection-media not loaded:", e && e.message); }
 try { require("./deploy-collection")(app, express); } catch (e) { console.error("deploy-collection not loaded:", e && e.message); }
+try { require("./opensea-collection-edit")(app, express); } catch (e) { console.error("opensea-collection-edit not loaded:", e && e.message); }
 
 app.listen(3000, () => console.log("Server running on port 3000!"));
