@@ -810,7 +810,6 @@ app.get('*', (req, res) => {
 try { require("./opensea-list")(app, express); } catch (e) { console.error("opensea-list not loaded:", e && e.message); }
 // OpenSea collection page banner uploader (4 Nov 2026). Isolated the same way: if it cannot load, only /opensea/collection-hero is missing.
 try { require("./opensea-collection-media")(app, express); } catch (e) { console.error("opensea-collection-media not loaded:", e && e.message); }
-try { require("./deploy-collection")(app, express); } catch (e) { console.error("deploy-collection not loaded:", e && e.message); }
 try { require("./opensea-collection-edit")(app, express); } catch (e) { console.error("opensea-collection-edit not loaded:", e && e.message); }
 
 app.listen(3000, () => console.log("Server running on port 3000!"));
