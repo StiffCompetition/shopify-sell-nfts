@@ -364,7 +364,6 @@ app.post("/webhooks/orders/create", async (req, res) => {
     const orderData = JSON.parse(body);
     orderIdForAlert = orderData.id.toString();
     await createClaimsForOrder(orderData);
-    await notifyShirtOnlyOrder(orderData);
   } catch (error) {
     console.error("Webhook processing error:", error);
     await alertFailure(
@@ -373,24 +372,6 @@ app.post("/webhooks/orders/create", async (req, res) => {
     );
   }
 });
-
-// A shirt or poster bought on its own (certificate page or Vault) carries a _shirt_token or _poster_token line property. Tell n8n which order to read.
-// Does nothing until SHIRT_HOOK_URL is set. A failure here must never affect claims.
-async function notifyShirtOnlyOrder(orderData) {
-  try {
-    if (!process.env.SHIRT_HOOK_URL) return;
-    const has = (orderData.line_items || []).some(li => (li.properties || []).some(p => p && (p.name === "_shirt_token" || p.name === "_poster_token")));
-    if (!has) return;
-    const r = await fetch(process.env.SHIRT_HOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: String(orderData.id) })
-    });
-    console.log(`Order ${orderData.id}: shirt-only hand-off sent (${r.status})`);
-  } catch (e) {
-    console.error("Shirt-only hand-off failed (claims unaffected):", e.message);
-  }
-}
 
 // Creates one claim per NFT line item of an order. Used by the Shopify order webhook and by the gift route below.
 // Duplicate-safe: a second call for the same order and product does nothing.
@@ -703,29 +684,6 @@ app.post("/claim/order/:orderId/submit", express.json(), async (req, res) => {
         await alertFailure(
           "Mint succeeded but tracking not recorded",
           `Order: ${orderId}\nTx: ${firstTx.txHash}\nError: ${e.message}\n\nCustomer is fine. Compliance record incomplete — needs adding manually.`
-        );
-      }
-    }
-
-    // Tell n8n the order has minted so any NFT shirt on the order can be made.
-    // Does nothing until SHIRT_HOOK_URL is set. A failure must not fail the claim.
-    if (process.env.SHIRT_HOOK_URL && mintedItems.length > 0) {
-      try {
-        const hookRes = await fetch(process.env.SHIRT_HOOK_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Shirt-Secret": process.env.SHIRT_HOOK_SECRET || "" },
-          body: JSON.stringify({
-            orderId,
-            walletAddress: mintAddress,
-            tokens: mintedItems.map((m) => ({ tokenId: m.tokenId, name: m.name })),
-          }),
-        });
-        if (!hookRes.ok) throw new Error(`n8n answered ${hookRes.status}`);
-      } catch (e) {
-        console.error("Shirt hook failed:", e.message);
-        await alertFailure(
-          "Mint succeeded but shirt hand-off failed",
-          `Order: ${orderId}\nError: ${e.message}\n\nCustomer is fine. If the order has an NFT shirt it has not been started.`
         );
       }
     }
