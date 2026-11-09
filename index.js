@@ -1,5 +1,20 @@
 const express = require("express");
 const app = express();
+
+// Old wallet address -> new address (8 Nov 2026). Only browser page visits (GET/HEAD asking for HTML) are redirected,
+// so API calls, webhooks and health checks on the old host keep working unchanged. Path and query (email, claim codes) are kept.
+const OLD_WALLET_HOST = "my-wallet.stiffcompetition.shop";
+const NEW_WALLET_ORIGIN = "https://wallet.stiffcompetitionart.com";
+app.use((req, res, next) => {
+  try {
+    const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(":")[0].toLowerCase();
+    const wantsPage = String(req.headers.accept || "").includes("text/html");
+    if (host === OLD_WALLET_HOST && (req.method === "GET" || req.method === "HEAD") && wantsPage) {
+      return res.redirect(302, NEW_WALLET_ORIGIN + req.originalUrl);
+    }
+  } catch (e) {}
+  next();
+});
 const getRawBody = require("raw-body");
 const crypto = require("crypto");
 const { ThirdwebSDK } = require("@thirdweb-dev/sdk");
